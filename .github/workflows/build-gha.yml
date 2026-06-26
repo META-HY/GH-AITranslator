@@ -52,7 +52,11 @@ jobs:
             dotnet restore src/GHAITranslator.Core/GHAITranslator.Core.csproj
             dotnet restore tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj
             dotnet build  src/GHAITranslator.Core/GHAITranslator.Core.csproj -c Release --no-restore
-            dotnet test   tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --no-build --logger "console;verbosity=normal"
+            # `dotnet test <csproj>` will rebuild the test project itself —
+            # using --no-build is fragile when invoked from a step that only
+            # built the dependency, because the test host's resource manifest
+            # in obj/ is missing.
+            dotnet test   tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --logger "console;verbosity=normal"
           } catch {
             Write-Host "::error::$_"
             exit 1
