@@ -74,6 +74,9 @@ jobs:
           DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
         run: |
           $ErrorActionPreference = "Stop"
+          # Create the artifacts dir up-front — Copy-Item doesn't create the
+          # destination folder and on a fresh runner the directory doesn't exist.
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
           # Drop --no-restore and let `dotnet build` do its own restore — on
           # Windows runners the assets file can be left in a state where
           # --no-restore sees it as stale even when our explicit restore
@@ -96,6 +99,7 @@ jobs:
           DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
         run: |
           $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
           dotnet build src/GHAITranslator/GHAITranslator.csproj `
             -c Release `
             -f net7.0-windows `
