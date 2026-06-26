@@ -124,11 +124,30 @@ jobs:
           }
 
           # Build the zip the user actually downloads.
+          #
+          # We deliberately use [System.IO.Compression.ZipFile]::CreateFromDirectory
+          # rather than the Compress-Archive cmdlet. Compress-Archive lives in
+          # the Microsoft.PowerShell.Archive module which is not preloaded on
+          # the pwsh that ships with windows-latest runners — its first use in
+          # a script emits the error:
+          #   "The 'Compress-Archive' command was found in the module
+          #    'Microsoft.PowerShell.Archive', but the module could not be
+          #    loaded."
+          # ZipFile.CreateFromDirectory is the .NET BCL API behind that
+          # cmdlet and is always available — no module discovery needed.
+          Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
           $zip = "dist/gha-rhino7.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
           Write-Host "Rhino 7 package contents:"
           Get-ChildItem $stage | Format-Table Name, Length
+          Write-Host "Zip contents:"
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $archive.Entries | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize
+          } finally {
+            $archive.Dispose()
+          }
 
       - name: Build Rhino 8 .gha (net7.0-windows, Release)
         shell: pwsh
@@ -166,9 +185,18 @@ jobs:
 
           $zip = "dist/gha-rhino8.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+          # See R7 step for why we don't use Compress-Archive here.
+          Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
           Write-Host "Rhino 8 package contents:"
           Get-ChildItem $stage | Format-Table Name, Length
+          Write-Host "Zip contents:"
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $archive.Entries | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize
+          } finally {
+            $archive.Dispose()
+          }
 
       - name: Upload Rhino 7 package
         uses: actions/upload-artifact@v4
