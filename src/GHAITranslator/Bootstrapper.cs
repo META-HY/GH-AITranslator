@@ -54,19 +54,62 @@ namespace GHAITranslator
             }
             catch (Exception ex) { Log.Error("Pack registration failed", ex); }
 
-            // menu
+            // menu — registered LATER, once Grasshopper's UI is fully up.
+            // Calling SettingsMenu.Install() from the static cctor fails
+            // silently because Grasshopper.Instances.DocumentEditor and
+            // its MainMenuStrip are not yet initialised when the assembly
+            // is first discovered. Schedule a one-shot install that fires
+            // off the WinForms message loop (Application.Idle) instead.
             try
             {
                 _menu = new SettingsMenu();
-                _menu.Install();
+                ScheduleMenuInstall();
             }
-            catch (Exception ex) { Log.Error("Menu install failed", ex); }
+            catch (Exception ex) { Log.Error("Menu scheduling failed", ex); }
 
             Log.Info($"Bootstrap done. Dictionary entries: {_dict.Count}");
         }
 
+        private static System.Windows.Forms.Timer _menuInstallTimer;
+
+        private static void ScheduleMenuInstall()
+        {
+            // Timer that polls for the GH MainMenuStrip every 250ms. As soon
+            // as it appears, we install the menu and stop the timer. The
+            // Application.Idle event isn't available in the static cctor
+            // (the message loop isn't running yet) so a WinForms Timer is
+            // the cleanest cross-version way to defer.
+            _menuInstallTimer?.Dispose();
+            _menuInstallTimer = new System.Windows.Forms.Timer { Interval = 250 };
+            _menuInstallTimer.Tick += (_, _) =>
+            {
+                try
+                {
+                    var editor = Grasshopper.Instances.DocumentEditor;
+                    if (editor == null) return;
+                    var menu = editor.MainMenuStrip;
+                    if (menu == null) return;
+
+                    _menu.Install();
+                    _menuInstallTimer.Stop();
+                    _menuInstallTimer.Dispose();
+                    _menuInstallTimer = null;
+                    Log.Info("Menu installed (delayed).");
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("Delayed menu install failed", ex);
+                    _menuInstallTimer?.Stop();
+                    _menuInstallTimer?.Dispose();
+                    _menuInstallTimer = null;
+                }
+            };
+            _menuInstallTimer.Start();
+        }
+
         public static void Shutdown()
         {
+            try { _menuInstallTimer?.Dispose(); _menuInstallTimer = null; } catch { /* best-effort */ }
             try { _menu?.Dispose(); } catch (Exception ex) { Log.Error("menu dispose", ex); }
             try { _renderer?.Detach(); } catch (Exception ex) { Log.Error("renderer detach", ex); }
             try { _dict?.Save(); } catch (Exception ex) { Log.Error("dict save", ex); }
