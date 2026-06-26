@@ -42,12 +42,21 @@ jobs:
 
       - name: Restore (Linux-friendly Core + tests first, sanity check)
         shell: pwsh
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
         run: |
-          $env:DOTNET_SYSTEM_GLOBALIZATION_INVARIANT = "1"
-          dotnet restore src/GHAITranslator.Core/GHAITranslator.Core.csproj
-          dotnet restore tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj
-          dotnet build  src/GHAITranslator.Core/GHAITranslator.Core.csproj -c Release --no-restore
-          dotnet test   tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --no-build
+          $ErrorActionPreference = "Stop"
+          dotnet --info | Tee-Object -FilePath "${{ runner.temp }}\dotnet-info.txt" | Out-Host
+          try {
+            dotnet restore src/GHAITranslator.Core/GHAITranslator.Core.csproj
+            dotnet restore tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj
+            dotnet build  src/GHAITranslator.Core/GHAITranslator.Core.csproj -c Release --no-restore
+            dotnet test   tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --no-build --logger "console;verbosity=normal"
+          } catch {
+            Write-Host "::error::$_"
+            exit 1
+          }
 
       - name: Restore Rhino 7 (net48) plugin
         shell: pwsh
