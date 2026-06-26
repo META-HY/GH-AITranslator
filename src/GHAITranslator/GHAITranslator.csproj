@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net48;net7.0-windows</TargetFrameworks>
+    <LangVersion>9.0</LangVersion>
+    <RootNamespace>GHAITranslator</RootNamespace>
+    <AssemblyName>GH-AITranslator</AssemblyName>
+    <UseWindowsForms>true</UseWindowsForms>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <NoWarn>$(NoWarn);CS1591;CS0162;CS0414;CS0067;CS8632;NU1701</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <!-- Rhino 7 -->
+    <PackageReference Include="RhinoCommon" Version="7.0.20314.3001" Condition="'$(TargetFramework)' == 'net48'" />
+    <PackageReference Include="Grasshopper" Version="7.0.20314.3001" Condition="'$(TargetFramework)' == 'net48'" PrivateAssets="all" />
+    <!-- Rhino 8 -->
+    <PackageReference Include="RhinoCommon" Version="8.32.26160.13001" Condition="'$(TargetFramework)' == 'net7.0-windows'" />
+    <PackageReference Include="Grasshopper" Version="8.32.26160.13001" Condition="'$(TargetFramework)' == 'net7.0-windows'" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GHAITranslator.Core\GHAITranslator.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net48'">
+    <DefineConstants>$(DefineConstants);RHINO7</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net7.0-windows'">
+    <DefineConstants>$(DefineConstants);RHINO8</DefineConstants>
+  </PropertyGroup>
+
+</Project>

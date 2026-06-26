@@ -1,0 +1,32 @@
+# .NET / Visual Studio build artefacts
+bin/
+obj/
+out/
+*.user
+*.suo
+.vs/
+.vscode/
+
+# Test results
+TestResults/
+*.coverage
+*.trx
+coverage.*.xml
+
+# Rider / VSCode
+.idea/
+*.DotSettings.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# NuGet
+*.nupkg
+.nuget/
+
+# Logs (except docs)
+*.log
+
+# Don't ignore workflow / github dir
+!.github/

@@ -1,0 +1,110 @@
+# Build GH-AITranslator plugin (.gha) for both Rhino 7 and Rhino 8.
+#
+# The .gha assembly is a renamed .NET DLL that Grasshopper loads from
+# %APPDATA%\Grasshopper\Libraries\. We build two flavors from one source:
+#   * net48      → Rhino 7  (.gha-loader-picks-on-extension)
+#   * net7.0-windows → Rhino 8
+#
+# GH SDKs ship as NuGet packages (RhinoCommon + Grasshopper) so we don't
+# need a Rhino install on the runner — the Windows VM only needs the .NET
+# SDK. We do enable Windows targeting so MSBuild treats it as a Windows
+# build.
+
+name: build-gha
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write  # only needed for tag-driven releases
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore (Linux-friendly Core + tests first, sanity check)
+        shell: pwsh
+        run: |
+          $env:DOTNET_SYSTEM_GLOBALIZATION_INVARIANT = "1"
+          dotnet restore src/GHAITranslator.Core/GHAITranslator.Core.csproj
+          dotnet restore tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj
+          dotnet build  src/GHAITranslator.Core/GHAITranslator.Core.csproj -c Release --no-restore
+          dotnet test   tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --no-build
+
+      - name: Restore Rhino 7 (net48) plugin
+        shell: pwsh
+        run: |
+          dotnet restore src/GHAITranslator/GHAITranslator.csproj -p:TargetFramework=net48
+
+      - name: Restore Rhino 8 (net7.0-windows) plugin
+        shell: pwsh
+        run: |
+          dotnet restore src/GHAITranslator/GHAITranslator.csproj -p:TargetFramework=net7.0-windows
+
+      - name: Build Rhino 7 .gha (net48, Release)
+        shell: pwsh
+        run: |
+          dotnet build src/GHAITranslator/GHAITranslator.csproj `
+            -c Release `
+            -f net48 `
+            -p:EnableWindowsTargeting=true `
+            --no-restore
+          # MSBuild emits GH-AITranslator.dll — Grasshopper reads that name
+          # from the assembly metadata and renames the file to .gha on copy.
+          Copy-Item `
+            -Path src/GHAITranslator/bin/Release/net48/GH-AITranslator.dll `
+            -Destination artifacts/GH-AITranslator-rhino7.gha `
+            -Force
+
+      - name: Build Rhino 8 .gha (net7.0-windows, Release)
+        shell: pwsh
+        run: |
+          dotnet build src/GHAITranslator/GHAITranslator.csproj `
+            -c Release `
+            -f net7.0-windows `
+            -p:EnableWindowsTargeting=true `
+            --no-restore
+          Copy-Item `
+            -Path src/GHAITranslator/bin/Release/net7.0-windows/GH-AITranslator.dll `
+            -Destination artifacts/GH-AITranslator-rhino8.gha `
+            -Force
+
+      - name: List artifacts
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts -Recurse | Format-Table FullName, Length
+
+      - name: Upload .gha artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gha-build
+          path: artifacts/*.gha
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach .gha to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/GH-AITranslator-rhino7.gha
+            artifacts/GH-AITranslator-rhino8.gha
+          generate_release_notes: true
