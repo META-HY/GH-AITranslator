@@ -86,12 +86,26 @@ jobs:
             -c Release `
             -f net48 `
             -p:EnableWindowsTargeting=true
-          # MSBuild emits GH-AITranslator.dll — Grasshopper reads that name
-          # from the assembly metadata and renames the file to .gha on copy.
+          $binR7 = "src/GHAITranslator/bin/Release/net48"
           Copy-Item `
-            -Path src/GHAITranslator/bin/Release/net48/GH-AITranslator.dll `
-            -Destination artifacts/GH-AITranslator-rhino7.gha `
+            -Path "$binR7/GH-AITranslator.dll", `
+                  "$binR7/GHAITranslator.Core.dll" `
+            -Destination artifacts/ `
             -Force
+          $newtonsoft = Get-ChildItem `
+            -Path "$env:USERPROFILE/.nuget/packages/newtonsoft.json/13.0.3/lib/net45" `
+            -Filter "Newtonsoft.Json.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($newtonsoft) {
+            Copy-Item -Path $newtonsoft.FullName -Destination artifacts/ -Force
+            Write-Host "Copied Newtonsoft.Json from $($newtonsoft.FullName)"
+          } else {
+            Write-Host "::warning::Newtonsoft.Json.dll not found in NuGet cache — GHA will likely fail to load on the user machine"
+          }
+          Rename-Item `
+            -Path artifacts/GH-AITranslator.dll `
+            -NewName artifacts/GH-AITranslator-rhino7.gha
+          Write-Host "Final artifacts:"
+          Get-ChildItem artifacts | Format-Table Name, Length
 
       - name: Build Rhino 8 .gha (net7.0-windows, Release)
         shell: pwsh
@@ -104,10 +118,39 @@ jobs:
             -c Release `
             -f net7.0-windows `
             -p:EnableWindowsTargeting=true
+          $binR8 = "src/GHAITranslator/bin/Release/net7.0-windows"
+          # Copy the plugin's main DLL, the Core DLL it depends on, and any
+          # third-party NuGet dependencies (Newtonsoft.Json) alongside it.
+          # GH does not auto-resolve NuGet deps for a GHA — they must sit
+          # next to the .gha. Without Newtonsoft.Json here, the GHA throws
+          # FileNotFoundException inside its static cctor, the cctor's
+          # try/catch swallows it, and the menu silently never registers.
           Copy-Item `
-            -Path src/GHAITranslator/bin/Release/net7.0-windows/GH-AITranslator.dll `
-            -Destination artifacts/GH-AITranslator-rhino8.gha `
+            -Path "$binR8/GH-AITranslator.dll", `
+                  "$binR8/GHAITranslator.Core.dll" `
+            -Destination artifacts/ `
             -Force
+          # Newtonsoft ships under net45 (which is binary-compatible with
+          # both net48 and net7.0-windows hosts) — pick the most compatible
+          # build explicitly rather than relying on NuGet's default pick.
+          $newtonsoft = Get-ChildItem `
+            -Path "$env:USERPROFILE/.nuget/packages/newtonsoft.json/13.0.3/lib/net45" `
+            -Filter "Newtonsoft.Json.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($newtonsoft) {
+            Copy-Item -Path $newtonsoft.FullName -Destination artifacts/ -Force
+            Write-Host "Copied Newtonsoft.Json from $($newtonsoft.FullName)"
+          } else {
+            Write-Host "::warning::Newtonsoft.Json.dll not found in NuGet cache — GHA will likely fail to load on the user machine"
+          }
+          # Rename the entry-point DLL to .gha (Grasshopper loader recognises
+          # the .gha extension and reads the GH_AssemblyInfo from the file).
+          Rename-Item `
+            -Path artifacts/GH-AITranslator.dll `
+            -NewName artifacts/GH-AITranslator-rhino8.gha
+          # Side-car dlls (Core + Newtonsoft) MUST keep their .dll extension
+          # and live next to the .gha — GH resolves them by file name.
+          Write-Host "Final artifacts:"
+          Get-ChildItem artifacts | Format-Table Name, Length
 
       - name: List artifacts
         shell: pwsh

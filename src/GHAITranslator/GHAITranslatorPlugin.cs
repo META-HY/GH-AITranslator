@@ -33,6 +33,11 @@ namespace GHAITranslator
         // idempotent so re-entrancy is safe.
         static GHAITranslatorPlugin()
         {
+            // Visible diagnostic on first-load failure: GH swallows cctor
+            // exceptions silently so a missing dependency or bad SDK call
+            // would otherwise leave the user with "no menu, no clue". The
+            // MessageBox is the cheapest way to surface the actual error
+            // for support tickets.
             try
             {
                 Bootstrapper.Initialize();
@@ -41,6 +46,16 @@ namespace GHAITranslator
             catch (Exception ex)
             {
                 Log.Error("Plugin static init failed", ex);
+                try
+                {
+                    System.Windows.Forms.MessageBox.Show(
+                        "GH-AITranslator 加载失败:\n" + ex.Message +
+                        "\n\n查看 %APPDATA%\\McNeel\\Rhinoceros\\<ver>\\Plug-ins\\GH-AITranslator\\*.log 获取详细堆栈。",
+                        "GH-AITranslator",
+                        System.Windows.Forms.MessageBoxButtons.OK,
+                        System.Windows.Forms.MessageBoxIcon.Error);
+                }
+                catch { /* MessageBox may fail in some hosts — keep quiet */ }
             }
         }
 
