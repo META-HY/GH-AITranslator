@@ -40,7 +40,7 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Restore (Linux-friendly Core + tests first, sanity check)
+      - name: Restore + sanity-check Core and tests
         shell: pwsh
         env:
           DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
@@ -49,37 +49,40 @@ jobs:
           $ErrorActionPreference = "Stop"
           dotnet --info | Tee-Object -FilePath "${{ runner.temp }}\dotnet-info.txt" | Out-Host
           try {
+            # Restore the three projects so the per-step restore actions below
+            # can be removed (single restore is more reliable — split restores
+            # with -p:TargetFramework don't actually scope the assets file and
+            # can leave the project.assets.json out of sync with what the
+            # subsequent build steps need).
+            dotnet restore src/GHAITranslator/GHAITranslator.csproj          -p:EnableWindowsTargeting=true
             dotnet restore src/GHAITranslator.Core/GHAITranslator.Core.csproj
             dotnet restore tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj
+
+            # Sanity-check the test build BEFORE we go near Rhino — if Core
+            # or the unit tests are broken, we want a fast fail with a clear
+            # log instead of a 5-minute Rhino build that masks the real cause.
             dotnet build  src/GHAITranslator.Core/GHAITranslator.Core.csproj -c Release --no-restore
-            # `dotnet test <csproj>` will rebuild the test project itself —
-            # using --no-build is fragile when invoked from a step that only
-            # built the dependency, because the test host's resource manifest
-            # in obj/ is missing.
             dotnet test   tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --logger "console;verbosity=normal"
           } catch {
             Write-Host "::error::$_"
             exit 1
           }
 
-      - name: Restore Rhino 7 (net48) plugin
-        shell: pwsh
-        run: |
-          dotnet restore src/GHAITranslator/GHAITranslator.csproj -p:TargetFramework=net48
-
-      - name: Restore Rhino 8 (net7.0-windows) plugin
-        shell: pwsh
-        run: |
-          dotnet restore src/GHAITranslator/GHAITranslator.csproj -p:TargetFramework=net7.0-windows
-
       - name: Build Rhino 7 .gha (net48, Release)
         shell: pwsh
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
         run: |
+          $ErrorActionPreference = "Stop"
+          # Drop --no-restore and let `dotnet build` do its own restore — on
+          # Windows runners the assets file can be left in a state where
+          # --no-restore sees it as stale even when our explicit restore
+          # succeeded. Letting build trigger a fast NoRestore=false pass
+          # is slower by ~2s but bulletproof.
           dotnet build src/GHAITranslator/GHAITranslator.csproj `
             -c Release `
             -f net48 `
-            -p:EnableWindowsTargeting=true `
-            --no-restore
+            -p:EnableWindowsTargeting=true
           # MSBuild emits GH-AITranslator.dll — Grasshopper reads that name
           # from the assembly metadata and renames the file to .gha on copy.
           Copy-Item `
@@ -89,12 +92,14 @@ jobs:
 
       - name: Build Rhino 8 .gha (net7.0-windows, Release)
         shell: pwsh
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
         run: |
+          $ErrorActionPreference = "Stop"
           dotnet build src/GHAITranslator/GHAITranslator.csproj `
             -c Release `
             -f net7.0-windows `
-            -p:EnableWindowsTargeting=true `
-            --no-restore
+            -p:EnableWindowsTargeting=true
           Copy-Item `
             -Path src/GHAITranslator/bin/Release/net7.0-windows/GH-AITranslator.dll `
             -Destination artifacts/GH-AITranslator-rhino8.gha `
