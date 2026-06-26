@@ -2,13 +2,23 @@
 #
 # The .gha assembly is a renamed .NET DLL that Grasshopper loads from
 # %APPDATA%\Grasshopper\Libraries\. We build two flavors from one source:
-#   * net48      → Rhino 7  (.gha-loader-picks-on-extension)
+#   * net48      → Rhino 7
 #   * net7.0-windows → Rhino 8
 #
 # GH SDKs ship as NuGet packages (RhinoCommon + Grasshopper) so we don't
 # need a Rhino install on the runner — the Windows VM only needs the .NET
 # SDK. We do enable Windows targeting so MSBuild treats it as a Windows
 # build.
+#
+# Artifact packaging:
+#   Each flavor gets its OWN zip — `gha-rhino7` and `gha-rhino8`. Inside
+#   each zip is EVERY file the user must drop into Libraries:
+#     * GH-AITranslator-rhino{N}.gha       (the renamed entry-point dll)
+#     * GHAITranslator.Core.dll             (our Core assembly, side-car)
+#     * Newtonsoft.Json.dll                 (NuGet dep — GH does NOT auto-
+#                                            resolve it, must sit next to .gha)
+#   User flow: download ONE zip → unzip → copy ALL files into Libraries.
+#   No more "I only got the .gha, now what" confusion.
 
 name: build-gha
 
@@ -74,14 +84,14 @@ jobs:
           DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
         run: |
           $ErrorActionPreference = "Stop"
-          # Create the artifacts dir up-front — Copy-Item doesn't create the
-          # destination folder and on a fresh runner the directory doesn't exist.
-          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
-          # Drop --no-restore and let `dotnet build` do its own restore — on
-          # Windows runners the assets file can be left in a state where
-          # --no-restore sees it as stale even when our explicit restore
-          # succeeded. Letting build trigger a fast NoRestore=false pass
-          # is slower by ~2s but bulletproof.
+          # Stage directory for THIS flavor. Build the entire payload here,
+          # then zip and upload it as `gha-rhino7`. Using a separate dir
+          # means the R7 and R8 payloads never collide if a future change
+          # runs them in parallel stages.
+          $stage = "dist/rhino7"
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
           dotnet build src/GHAITranslator/GHAITranslator.csproj `
             -c Release `
             -f net48 `
@@ -92,22 +102,33 @@ jobs:
             Get-ChildItem $binR7 -ErrorAction SilentlyContinue | Format-Table Name
             exit 1
           }
-          # Copy straight to the final .gha filename — avoids the
-          # Rename-Item "represents a path or device name" failure mode
-          # we hit when the source DLL gets touched between steps.
-          Copy-Item -Path "$binR7/GH-AITranslator.dll" -Destination artifacts/GH-AITranslator-rhino7.gha -Force
-          Copy-Item -Path "$binR7/GHAITranslator.Core.dll" -Destination artifacts/ -Force
+
+          # Copy the entry-point DLL to its final .gha filename. GH's loader
+          # looks at the .gha extension and reads GH_AssemblyInfo from it.
+          Copy-Item -Path "$binR7/GH-AITranslator.dll" -Destination "$stage/GH-AITranslator-rhino7.gha" -Force
+          # Side-car DLLs MUST keep their .dll extension — GH resolves them by
+          # filename next to the .gha. Without these:
+          #   - Core.dll missing → FileNotFoundException at first method call
+          #   - Newtonsoft.Json.dll missing → FileNotFoundException in cctor →
+          #     menu silently never registers (the bug we hit at #10).
+          Copy-Item -Path "$binR7/GHAITranslator.Core.dll" -Destination $stage/ -Force
           $newtonsoft = Get-ChildItem `
             -Path "$env:USERPROFILE/.nuget/packages/newtonsoft.json/13.0.3/lib/net45" `
             -Filter "Newtonsoft.Json.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($newtonsoft) {
-            Copy-Item -Path $newtonsoft.FullName -Destination artifacts/ -Force
+            Copy-Item -Path $newtonsoft.FullName -Destination $stage/ -Force
             Write-Host "Copied Newtonsoft.Json from $($newtonsoft.FullName)"
           } else {
-            Write-Host "::warning::Newtonsoft.Json.dll not found in NuGet cache — GHA will likely fail to load on the user machine"
+            Write-Host "::error::Newtonsoft.Json.dll not found in NuGet cache — GHA WILL fail to load on user machines"
+            exit 1
           }
-          Write-Host "Final artifacts:"
-          Get-ChildItem artifacts | Format-Table Name, Length
+
+          # Build the zip the user actually downloads.
+          $zip = "dist/gha-rhino7.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+          Write-Host "Rhino 7 package contents:"
+          Get-ChildItem $stage | Format-Table Name, Length
 
       - name: Build Rhino 8 .gha (net7.0-windows, Release)
         shell: pwsh
@@ -115,7 +136,10 @@ jobs:
           DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          $stage = "dist/rhino8"
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
           dotnet build src/GHAITranslator/GHAITranslator.csproj `
             -c Release `
             -f net7.0-windows `
@@ -126,35 +150,39 @@ jobs:
             Get-ChildItem $binR8 -ErrorAction SilentlyContinue | Format-Table Name
             exit 1
           }
-          # Copy the plugin's main DLL straight to the final .gha filename.
-          # GH does not auto-resolve NuGet deps for a GHA — Newtonsoft.Json
-          # must sit next to the .gha. Without it, the GHA throws
-          # FileNotFoundException inside its static cctor, the cctor's
-          # try/catch swallows it, and the menu silently never registers.
-          Copy-Item -Path "$binR8/GH-AITranslator.dll" -Destination artifacts/GH-AITranslator-rhino8.gha -Force
-          Copy-Item -Path "$binR8/GHAITranslator.Core.dll" -Destination artifacts/ -Force
+
+          Copy-Item -Path "$binR8/GH-AITranslator.dll" -Destination "$stage/GH-AITranslator-rhino8.gha" -Force
+          Copy-Item -Path "$binR8/GHAITranslator.Core.dll" -Destination $stage/ -Force
           $newtonsoft = Get-ChildItem `
             -Path "$env:USERPROFILE/.nuget/packages/newtonsoft.json/13.0.3/lib/net45" `
             -Filter "Newtonsoft.Json.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($newtonsoft) {
-            Copy-Item -Path $newtonsoft.FullName -Destination artifacts/ -Force
+            Copy-Item -Path $newtonsoft.FullName -Destination $stage/ -Force
             Write-Host "Copied Newtonsoft.Json from $($newtonsoft.FullName)"
           } else {
-            Write-Host "::warning::Newtonsoft.Json.dll not found in NuGet cache — GHA will likely fail to load on the user machine"
+            Write-Host "::error::Newtonsoft.Json.dll not found in NuGet cache — GHA WILL fail to load on user machines"
+            exit 1
           }
-          Write-Host "Final artifacts:"
-          Get-ChildItem artifacts | Format-Table Name, Length
 
-      - name: List artifacts
-        shell: pwsh
-        run: |
-          Get-ChildItem artifacts -Recurse | Format-Table FullName, Length
+          $zip = "dist/gha-rhino8.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+          Write-Host "Rhino 8 package contents:"
+          Get-ChildItem $stage | Format-Table Name, Length
 
-      - name: Upload .gha artifacts
+      - name: Upload Rhino 7 package
         uses: actions/upload-artifact@v4
         with:
-          name: gha-build
-          path: artifacts/*.gha
+          name: gha-rhino7
+          path: dist/gha-rhino7.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Rhino 8 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: gha-rhino8
+          path: dist/gha-rhino8.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -163,6 +191,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/GH-AITranslator-rhino7.gha
-            artifacts/GH-AITranslator-rhino8.gha
+            dist/gha-rhino7.zip
+            dist/gha-rhino8.zip
           generate_release_notes: true
