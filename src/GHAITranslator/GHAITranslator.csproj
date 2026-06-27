@@ -10,40 +10,20 @@
     <UseWindowsForms>true</UseWindowsForms>
     <UseWPF>false</UseWPF>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <!-- GH 7 loads net48, R8 loads net7.0-windows. -->
+    <!-- GH 7 loads net48, R8 loads net7.0-windows. Grasshopper.dll /
+         RhinoCommon.dll are consumed as NuGet packages (not HintPath'd
+         from a local SDK install) so the CI runner does not need a
+         pre-installed Rhino 8 SDK. -->
   </PropertyGroup>
 
-  <ItemGroup Condition=" '$(TargetFramework)' == 'net48' ">
-    <Reference Include="Grasshopper">
-      <HintPath>$(GH_SDK)\Grasshopper.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="GH_IO">
-      <HintPath>$(GH_SDK)\GH_IO.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="RhinoCommon">
-      <HintPath>$(RHINO_SDK)\RhinoCommon.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-  </ItemGroup>
-
-  <ItemGroup Condition=" '$(TargetFramework)' == 'net7.0-windows' ">
-    <Reference Include="Grasshopper">
-      <HintPath>$(GH_SDK_N7)\Grasshopper.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="GH_IO">
-      <HintPath>$(GH_SDK_N7)\GH_IO.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="RhinoCommon">
-      <HintPath>$(RHINO_SDK_N7)\RhinoCommon.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-  </ItemGroup>
-
   <ItemGroup>
+    <!-- ExcludeAssets="runtime" prevents the DLLs from being copied
+         next to the .gha in bin/. We do NOT ship Grasshopper.dll or
+         RhinoCommon.dll — they live in the Rhino installation
+         directory and the loader resolves them from there at runtime.
+         We only need compile-time metadata. -->
+    <PackageReference Include="Grasshopper" Version="8.25.25314.11001" ExcludeAssets="runtime" />
+    <PackageReference Include="RhinoCommon" Version="8.25.25314.11001" ExcludeAssets="runtime" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 

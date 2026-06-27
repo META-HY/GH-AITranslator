@@ -36,7 +36,9 @@ jobs:
         run: dotnet test tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --verbosity normal
 
   # Windows job: build the actual plugin .gha for R7 (net48) and R8
-  # (net7.0-windows). Matrix produced one GHA per flavor.
+  # (net7.0-windows). Grasshopper.dll and RhinoCommon.dll are pulled
+  # from NuGet.org as compile-time references — the runtime loader
+  # resolves the real assemblies from the Rhino install dir.
   build-gha:
     needs: build-test
     strategy:
@@ -57,25 +59,12 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Fetch GH + Rhino SDK NuGets
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/gh-sdk" | Out-Null
-          # GH 7 + GH 8.25 SDKs + RhinoCommon 8.25
-          nuget install grasshopper  -Version 7.0.20314.3001   -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
-          nuget install grasshopper  -Version 8.25.25314.11001 -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
-          nuget install rhinocommon  -Version 8.25.25314.11001 -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
-          Get-ChildItem -Recurse "$env:RUNNER_TEMP/gh-sdk" | Where-Object { $_.Name -eq "*.dll" } | Select-Object FullName
+      - name: Restore plugin
+        # Use --packages so both matrix legs share a cache if reused.
+        run: dotnet restore src/GHAITranslator/GHAITranslator.csproj
 
       - name: Build plugin for ${{ matrix.flavor }}
-        shell: pwsh
-        env:
-          GH_SDK:        ${{ format('{0}/gh-sdk/grasshopper/7.0.20314.3001/lib/net48',   env.RUNNER_TEMP) }}
-          RHINO_SDK:     ${{ format('{0}/gh-sdk/rhinocommon/8.25.25314.11001/lib/net48', env.RUNNER_TEMP) }}
-          GH_SDK_N7:     ${{ format('{0}/gh-sdk/grasshopper/8.25.25314.11001/lib/net7.0',env.RUNNER_TEMP) }}
-          RHINO_SDK_N7:  ${{ format('{0}/gh-sdk/rhinocommon/8.25.25314.11001/lib/net7.0',env.RUNNER_TEMP) }}
-        run: |
-          dotnet build src/GHAITranslator/GHAITranslator.csproj -c Release -f ${{ matrix.tfm }}
+        run: dotnet build src/GHAITranslator/GHAITranslator.csproj -c Release -f ${{ matrix.tfm }} --no-restore
 
       - name: Stage .gha + side-by-side Newtonsoft.Json
         shell: pwsh
