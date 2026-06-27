@@ -30,7 +30,10 @@ jobs:
       - name: Restore Tests
         run: dotnet restore tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj
       - name: Test
-        run: dotnet test tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --no-build --verbosity normal
+        # No --no-build: let `dotnet test` build Tests itself. The previous
+        # version assumed Tests were already built, but the ubuntu job only
+        # built Core, so the Tests .dll was missing under bin/.
+        run: dotnet test tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --verbosity normal
 
   # Windows job: build the actual plugin .gha for R7 (net48) and R8
   # (net7.0-windows). Matrix produced one GHA per flavor.
