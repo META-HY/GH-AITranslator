@@ -1,46 +1,60 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <TargetFrameworks>net48;net7.0-windows</TargetFrameworks>
-    <LangVersion>9.0</LangVersion>
-    <RootNamespace>GHAITranslator</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>CS1591;CS8618;CS8625</NoWarn>
     <AssemblyName>GH-AITranslator</AssemblyName>
+    <RootNamespace>GHAITranslator</RootNamespace>
     <UseWindowsForms>true</UseWindowsForms>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <NoWarn>$(NoWarn);CS1591;CS0162;CS0414;CS0067;CS8632;CS8604;NU1701</NoWarn>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <UseWPF>false</UseWPF>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- GH 7 loads net48, R8 loads net7.0-windows. -->
   </PropertyGroup>
 
-  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
-    <Reference Include="System.Net.Http" />
+  <ItemGroup Condition=" '$(TargetFramework)' == 'net48' ">
+    <Reference Include="Grasshopper">
+      <HintPath>$(GH_SDK)\Grasshopper.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="GH_IO">
+      <HintPath>$(GH_SDK)\GH_IO.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="RhinoCommon">
+      <HintPath>$(RHINO_SDK)\RhinoCommon.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition=" '$(TargetFramework)' == 'net7.0-windows' ">
+    <Reference Include="Grasshopper">
+      <HintPath>$(GH_SDK_N7)\Grasshopper.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="GH_IO">
+      <HintPath>$(GH_SDK_N7)\GH_IO.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="RhinoCommon">
+      <HintPath>$(RHINO_SDK_N7)\RhinoCommon.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <!-- Rhino 7 -->
-    <PackageReference Include="RhinoCommon" Version="7.0.20314.3001" Condition="'$(TargetFramework)' == 'net48'" />
-    <PackageReference Include="Grasshopper" Version="7.0.20314.3001" Condition="'$(TargetFramework)' == 'net48'" PrivateAssets="all" />
-    <!-- Rhino 8 -->
-    <!--
-      Pin to 8.25.25314.11001 to match the Grasshopper SDK shipped with
-      Rhino 8 SR25 (2025-11-10). Grasshopper.dll is strongly version-bound:
-      a .gha built against 8.32 SDK refuses to load in an 8.25 host with
-      "built against a newer minor version of the Grasshopper SDK".
-    -->
-    <PackageReference Include="RhinoCommon" Version="8.25.25314.11001" Condition="'$(TargetFramework)' == 'net7.0-windows'" />
-    <PackageReference Include="Grasshopper" Version="8.25.25314.11001" Condition="'$(TargetFramework)' == 'net7.0-windows'" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\GHAITranslator.Core\GHAITranslator.Core.csproj" />
   </ItemGroup>
 
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net48'">
-    <DefineConstants>$(DefineConstants);RHINO7</DefineConstants>
+  <!-- Ship Newtonsoft.Json side-by-side: GH 7 / Rhino 7 ship an older
+       version that the plugin loader will pick up; we ship ours so the
+       loader uses ours. -->
+  <PropertyGroup>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
-
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net7.0-windows'">
-    <DefineConstants>$(DefineConstants);RHINO8</DefineConstants>
-  </PropertyGroup>
-
 </Project>

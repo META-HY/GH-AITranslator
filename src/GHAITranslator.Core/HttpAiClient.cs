@@ -1,112 +1,126 @@
-// Concrete IAiClient: POSTs to an OpenAI-compatible chat-completions endpoint
-// and parses the JSON content the model is asked to return.
-
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using GHAITranslator.Core;
 using GHAITranslator.Core.Models;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-namespace GHAITranslator.Core.AI
+namespace GHAITranslator.Core;
+
+/// <summary>
+/// OpenAI-compatible chat-completions HTTP client. Works with OpenAI,
+/// Qwen, DeepSeek, and any custom endpoint that implements the
+/// <c>POST /chat/completions</c> JSON shape.
+/// </summary>
+public sealed class HttpAiClient : IAiClient, IDisposable
 {
-    public sealed class HttpAiClient : IAiClient, IDisposable
+    private readonly AiProviderConfig _cfg;
+    private readonly HttpClient _http;
+    private readonly PromptBuilder _prompts;
+
+    public HttpAiClient(AiProviderConfig cfg, PromptBuilder? prompts = null)
     {
-        private readonly PluginSettings _settings;
-        private readonly HttpClient _http;
-        private readonly bool _ownsHttp;
+        _cfg = cfg ?? new AiProviderConfig();
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(5, _cfg.TimeoutSeconds)) };
+        _prompts = prompts ?? new PromptBuilder();
+    }
 
-        public HttpAiClient(PluginSettings settings) : this(settings, new HttpClient { Timeout = TimeSpan.FromSeconds(15) }, ownsHttp: true) { }
-
-        /// <summary>
-        /// Test-friendly constructor that takes a custom <see cref="HttpMessageHandler"/>.
-        /// The handler is wrapped in a fresh HttpClient owned by this instance.
-        /// </summary>
-        public HttpAiClient(PluginSettings settings, HttpMessageHandler handler)
-            : this(settings, new HttpClient(handler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(15) }, ownsHttp: true) { }
-
-        private HttpAiClient(PluginSettings settings, HttpClient http, bool ownsHttp)
+    public async Task<TranslationEntry?> TranslateAsync(ComponentInfo info, CancellationToken ct = default)
+    {
+        if (info == null || string.IsNullOrEmpty(info.OriginalName)) return null;
+        if (string.IsNullOrEmpty(_cfg.ApiKey))
         {
-            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-            _http = http;
-            _ownsHttp = ownsHttp;
+            Log.Warn("HttpAiClient: API key is empty, skipping translation.");
+            return null;
         }
 
-        public async Task<TranslationEntry?> TranslateAsync(
-            ComponentInfo component,
-            CancellationToken cancellationToken = default)
+        var messages = _prompts.BuildChatMessages(info);
+        var payload = new
         {
-            if (component == null) return null;
-            if (string.IsNullOrEmpty(_settings.ApiKey))
+            model = _cfg.Model,
+            messages,
+            temperature = 0.1,
+            response_format = new { type = "json_object" },
+        };
+
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, _cfg.Endpoint);
+            req.Headers.Add("Authorization", $"Bearer {_cfg.ApiKey}");
+            req.Content = new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
+
+            var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+            if (!resp.IsSuccessStatusCode)
             {
-                Log.Warn("AI translation requested but ApiKey is empty. Set one in the settings panel.");
-                return null;
-            }
-            if (string.IsNullOrEmpty(_settings.ApiEndpoint))
-            {
-                Log.Warn("AI translation requested but ApiEndpoint is empty.");
+                Log.Warn($"HttpAiClient {(int)resp.StatusCode}: {Truncate(body, 200)}");
                 return null;
             }
 
-            try
-            {
-                var body = new
-                {
-                    model = _settings.ModelName,
-                    temperature = 0.1,
-                    response_format = new { type = "json_object" },
-                    messages = new[]
-                    {
-                        new { role = "system", content = PromptBuilder.SystemPrompt },
-                        new { role = "user", content = PromptBuilder.BuildUserPrompt(component) }
-                    }
-                };
-                var json = JsonConvert.SerializeObject(body);
-                using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
-                using (var req = new HttpRequestMessage(HttpMethod.Post, _settings.ApiEndpoint) { Content = content })
-                {
-                    req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey);
-                    using (var resp = await _http.SendAsync(req, cancellationToken).ConfigureAwait(false))
-                    {
-                        if (!resp.IsSuccessStatusCode) return null;
-                        var raw = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
-                        return ParseContent(raw);
-                    }
-                }
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                Log.Error("AI translate failed", ex);
-                return null;
-            }
+            return ParseResponse(body, info);
         }
-
-        private static TranslationEntry? ParseContent(string responseJson)
+        catch (OperationCanceledException)
         {
-            try
-            {
-                var outer = JObject.Parse(responseJson);
-                var content = outer["choices"]?[0]?["message"]?["content"]?.Value<string>();
-                if (string.IsNullOrEmpty(content)) return null;
-                var entry = JsonConvert.DeserializeObject<TranslationEntry>(content);
-                if (entry == null || string.IsNullOrEmpty(entry.Name)) return null;
-                return entry;
-            }
-            catch (Exception ex)
-            {
-                Log.Error("Failed to parse AI response", ex);
-                return null;
-            }
+            throw;
         }
-
-        public void Dispose()
+        catch (Exception ex)
         {
-            if (_ownsHttp) _http.Dispose();
+            Log.Warn($"HttpAiClient.TranslateAsync failed: {ex.Message}");
+            return null;
         }
     }
+
+    private static TranslationEntry? ParseResponse(string body, ComponentInfo info)
+    {
+        try
+        {
+            var jo = JObject.Parse(body);
+            var content = jo["choices"]?[0]?["message"]?["content"]?.Value<string>();
+            if (string.IsNullOrEmpty(content)) return null;
+
+            // The model is asked to return JSON. Some providers wrap it in
+            // ```json ... ``` even with response_format=json_object.
+            content = StripCodeFence(content);
+
+            var parsed = JObject.Parse(content);
+            return new TranslationEntry
+            {
+                Key          = info.LookupKey,
+                Name         = parsed.Value<string>("name") ?? "",
+                NickName     = parsed.Value<string>("nick") ?? "",
+                Description  = parsed.Value<string>("desc") ?? "",
+                Category     = parsed.Value<string>("cat")  ?? "",
+                NameEn       = info.OriginalName,
+                DescriptionEn = info.OriginalDescription,
+                CategoryEn   = info.Category,
+            };
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"HttpAiClient.ParseResponse failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static string StripCodeFence(string s)
+    {
+        s = s.Trim();
+        if (s.StartsWith("```"))
+        {
+            var firstNewline = s.IndexOf('\n');
+            if (firstNewline >= 0) s = s.Substring(firstNewline + 1);
+            if (s.EndsWith("```")) s = s.Substring(0, s.Length - 3);
+        }
+        return s.Trim();
+    }
+
+    private static string Truncate(string s, int max) =>
+        s == null ? "" : (s.Length <= max ? s : s.Substring(0, max) + "…");
+
+    public void Dispose() => _http.Dispose();
 }

@@ -1,55 +1,46 @@
+using System.Collections.Generic;
 using System.Text;
 using GHAITranslator.Core.Models;
 
 namespace GHAITranslator.Core;
 
 /// <summary>
-/// Builds the prompts that drive the LLM translator. Lives in Core so it can be
-/// unit-tested without a real LLM call. The wording mirrors the design doc.
+/// Builds the system + user prompt pair sent to the LLM. The system prompt
+/// fixes the schema and rules; the user prompt carries the source
+/// component's metadata.
 /// </summary>
-public static class PromptBuilder
+public sealed class PromptBuilder
 {
-    public const string SystemPrompt = @"你是专业的参数化设计与建筑行业术语翻译专家,精通 Grasshopper、Rhino 及各类参数化插件的专业术语。
-请将给定的 Grasshopper 组件信息翻译为简体中文,严格遵循以下规则:
-1. 术语必须符合国内建筑、参数化设计行业通用译法,禁止字面直译;
-2. 组件名称简洁精准,通常 2-6 个字,符合 GH 用户使用习惯;
-3. 功能描述清晰易懂,专业术语准确;
-4. 输入输出参数名称保持行业通用简称;
-5. 严格输出 JSON 格式,不要包含任何额外解释或 Markdown 代码块。
-输出格式:
-{
-  ""name"": ""组件中文名称"",
-  ""description"": ""组件功能中文描述"",
-  ""inputs"": { ""参数英文名"": ""参数中文名"", ... },
-  ""outputs"": { ""参数英文名"": ""参数中文名"", ... }
-}";
+    public const string SystemPrompt =
+        "你是 Grasshopper (GH) 插件的本地化专家。请将下列 GH 内置或第三方组件的英文元数据翻译成中文，并严格按 JSON schema 输出。\n" +
+        "\n" +
+        "规则：\n" +
+        "1. name: 中文显示名，使用 GH 行业约定译法（如 Loft→放样、Sweep→扫掠、Boolean→布尔运算、Domain→域、Interval→区间）。\n" +
+        "2. nick: 中文端口标签，最多 2 个汉字。\n" +
+        "3. desc: 中文悬浮提示，以句号「。」结尾，不超过 60 字。\n" +
+        "4. cat: 中文面板分组，仅限下列之一：参数、几何、数学、向量、曲线、曲面、网格、相交、变换、显示、逻辑、脚本、输入、输出、集合、树形数据、特殊。\n" +
+        "5. 不要混入英文。技术专名（NURBS、B-rep、XYZ）可保留。\n" +
+        "6. 只返回 JSON，不要 ``` 围栏，不要解释。";
 
-    /// <summary>Build the user-side prompt from a <see cref="ComponentInfo"/>.</summary>
-    public static string BuildUserPrompt(ComponentInfo info)
+    public IReadOnlyList<(string role, string content)> BuildChatMessages(ComponentInfo info)
     {
-        if (info == null) throw new System.ArgumentNullException(nameof(info));
+        var user = new StringBuilder();
+        user.AppendLine($"Class: {info.FullName}");
+        user.AppendLine($"Assembly: {info.Assembly}");
+        user.AppendLine($"Category (EN): {info.Category}");
+        if (!string.IsNullOrEmpty(info.SubCategory))
+            user.AppendLine($"SubCategory (EN): {info.SubCategory}");
+        user.AppendLine($"Name (EN): {info.OriginalName}");
+        user.AppendLine($"NickName (EN): {info.OriginalNickName}");
+        user.AppendLine($"Description (EN): {info.OriginalDescription}");
+        user.AppendLine();
+        user.AppendLine("Output JSON schema:");
+        user.AppendLine("{ \"name\": \"...\", \"nick\": \"...\", \"desc\": \"...\", \"cat\": \"...\" }");
 
-        var sb = new StringBuilder();
-        sb.Append("组件名称:").AppendLine(info.Name ?? string.Empty);
-        sb.Append("组件昵称:").AppendLine(info.NickName ?? string.Empty);
-        sb.Append("所属插件:").AppendLine(string.IsNullOrEmpty(info.PluginName) ? "Native" : info.PluginName);
-        sb.Append("功能描述:").AppendLine(info.Description ?? string.Empty);
-
-        AppendParamBlock(sb, "输入参数", info.InputParams);
-        AppendParamBlock(sb, "输出参数", info.OutputParams);
-
-        return sb.ToString();
-    }
-
-    private static void AppendParamBlock(StringBuilder sb, string header, ParamInfo[]? parameters)
-    {
-        if (parameters == null || parameters.Length == 0) return;
-        sb.Append(header).AppendLine(":");
-        foreach (var p in parameters)
+        return new[]
         {
-            var name = string.IsNullOrEmpty(p.Name) ? "?" : p.Name;
-            var desc = string.IsNullOrEmpty(p.Description) ? "(无描述)" : p.Description;
-            sb.Append("- ").Append(name).Append(": ").AppendLine(desc);
-        }
+            ("system", SystemPrompt),
+            ("user", user.ToString()),
+        };
     }
 }

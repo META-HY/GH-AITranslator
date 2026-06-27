@@ -1,121 +1,53 @@
-// Provider registry: every supported LLM endpoint. The HTTP client picks the
-// provider by Id at construction time and stamps the right headers / request
-// shape. Adding a new provider is a one-line addition here.
-
 using System;
+using GHAITranslator.Core.Models;
 
-namespace GHAITranslator.Core
+namespace GHAITranslator.Core;
+
+/// <summary>
+/// Known provider presets. Users may also enter a Custom endpoint.
+/// </summary>
+public static class ProviderRegistry
 {
+    public sealed class Preset
+    {
+        public string Name     { get; init; } = "";
+        public string Endpoint { get; init; } = "";
+        public string Model    { get; init; } = "";
+    }
+
+    public static readonly Preset[] Known = new[]
+    {
+        new Preset { Name = "OpenAI",   Endpoint = "https://api.openai.com/v1/chat/completions",
+                                       Model    = "gpt-4o-mini" },
+        new Preset { Name = "DeepSeek", Endpoint = "https://api.deepseek.com/v1/chat/completions",
+                                       Model    = "deepseek-chat" },
+        new Preset { Name = "Qwen",     Endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                                       Model    = "qwen-plus" },
+        new Preset { Name = "Custom",   Endpoint = "", Model = "" },
+    };
+
+    public static Preset? Find(string name)
+    {
+        foreach (var p in Known)
+            if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p;
+        return null;
+    }
+
     /// <summary>
-    /// Logical name for a model provider. The default endpoint + default model
-    /// are looked up from <see cref="ProviderRegistry"/>; users can still
-    /// override either field manually in the settings panel.
+    /// Apply preset defaults to <paramref name="cfg"/> when the user picks a
+    /// known provider. Does not overwrite the user's API key.
     /// </summary>
-    public enum AiProvider
+    public static AiProviderConfig ApplyPreset(AiProviderConfig cfg, string presetName)
     {
-        Qwen = 0,          // 通义千问 DashScope
-        DeepSeek = 1,      // DeepSeek
-        OpenAi = 2,        // OpenAI
-        Custom = 99        // 用户自定义端点
-    }
-
-    public sealed class ProviderDescriptor
-    {
-        public AiProvider Id { get; }
-        public string DisplayName { get; }
-        public string DefaultEndpoint { get; }
-        public string DefaultModel { get; }
-        public string KeyPlaceholder { get; }
-        public string HelpUrl { get; }
-
-        public ProviderDescriptor(
-            AiProvider id,
-            string displayName,
-            string defaultEndpoint,
-            string defaultModel,
-            string keyPlaceholder,
-            string helpUrl)
+        var p = Find(presetName);
+        if (p == null) return cfg;
+        return new AiProviderConfig
         {
-            Id = id;
-            DisplayName = displayName;
-            DefaultEndpoint = defaultEndpoint;
-            DefaultModel = defaultModel;
-            KeyPlaceholder = keyPlaceholder;
-            HelpUrl = helpUrl;
-        }
-    }
-
-    public static class ProviderRegistry
-    {
-        public static readonly ProviderDescriptor Qwen = new(
-            AiProvider.Qwen,
-            "通义千问 (Qwen)",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            "qwen-plus",
-            "sk-... DashScope API Key",
-            "https://dashscope.console.aliyun.com/apiKey");
-
-        public static readonly ProviderDescriptor DeepSeek = new(
-            AiProvider.DeepSeek,
-            "DeepSeek",
-            "https://api.deepseek.com/v1/chat/completions",
-            "deepseek-chat",
-            "sk-... DeepSeek API Key",
-            "https://platform.deepseek.com/api_keys");
-
-        public static readonly ProviderDescriptor OpenAi = new(
-            AiProvider.OpenAi,
-            "OpenAI",
-            "https://api.openai.com/v1/chat/completions",
-            "gpt-4o-mini",
-            "sk-... OpenAI API Key",
-            "https://platform.openai.com/api-keys");
-
-        public static readonly ProviderDescriptor Custom = new(
-            AiProvider.Custom,
-            "自定义 (OpenAI 兼容)",
-            "",
-            "",
-            "Bearer Token",
-            "");
-
-        public static ProviderDescriptor Resolve(AiProvider id) => id switch
-        {
-            AiProvider.Qwen => Qwen,
-            AiProvider.DeepSeek => DeepSeek,
-            AiProvider.OpenAi => OpenAi,
-            AiProvider.Custom => Custom,
-            _ => Qwen
+            Provider = p.Name,
+            ApiKey   = cfg.ApiKey,
+            Endpoint = p.Endpoint,
+            Model    = p.Model,
+            TimeoutSeconds = cfg.TimeoutSeconds > 0 ? cfg.TimeoutSeconds : 30,
         };
-
-        public static ProviderDescriptor[] All => new[] { Qwen, DeepSeek, OpenAi, Custom };
-
-        /// <summary>
-        /// Apply provider defaults into the settings when the user switches
-        /// provider. Does NOT overwrite a custom endpoint that the user has
-        /// already set for this provider (we keep it if non-empty).
-        /// </summary>
-        public static void ApplyDefaults(PluginSettings settings, AiProvider id)
-        {
-            if (settings == null) throw new ArgumentNullException(nameof(settings));
-            var desc = Resolve(id);
-
-            // If the user is switching TO this provider for the first time, we
-            // override endpoint/model. If they have an existing key, we keep it.
-            if (id != settings.Provider)
-            {
-                settings.Provider = id;
-                settings.ApiEndpoint = desc.DefaultEndpoint;
-                settings.ModelName = desc.DefaultModel;
-            }
-            else
-            {
-                // re-apply defaults for blank fields (e.g. fresh settings)
-                if (string.IsNullOrWhiteSpace(settings.ApiEndpoint))
-                    settings.ApiEndpoint = desc.DefaultEndpoint;
-                if (string.IsNullOrWhiteSpace(settings.ModelName))
-                    settings.ModelName = desc.DefaultModel;
-            }
-        }
     }
 }

@@ -1,63 +1,54 @@
-using System.Collections.Generic;
 using Newtonsoft.Json;
 
 namespace GHAITranslator.Core.Models;
 
 /// <summary>
-/// A single translation entry. Source: builtin | user | ai.
-///
-/// Field history:
-///   * Original: Name (Chinese full name) + Description + Inputs/Outputs dicts.
-///   * Added in v2: NickName (Chinese short name) + NickNameEn (English short
-///     name, optional) + NameEn (English full name, optional). All new fields
-///     default to "" so dictionaries written by v1 still load — Newtonsoft
-///     leaves missing JSON keys at the property's default value.
-///
-/// The display layer combines Name/NickName/NameEn/NickNameEn with the
-/// active <see cref="LanguageMode"/> to produce the final string the
-/// Grasshopper component receives.
+/// One dictionary entry. Five fields are mandatory; English mirrors are
+/// optional but recommended so <see cref="LanguageFormatter"/> can render the
+/// Bilingual and English modes without re-querying the AI.
 /// </summary>
-public class TranslationEntry
+public sealed class TranslationEntry
 {
-    /// <summary>Chinese full component name. Empty == not yet translated.</summary>
-    public string Name { get; set; } = string.Empty;
+    /// <summary>Lookup key, e.g. <c>"Native_Point"</c>.</summary>
+    [JsonProperty("key")]
+    public string Key { get; set; } = "";
+
+    /// <summary>Chinese display name, e.g. <c>"点"</c>.</summary>
+    [JsonProperty("name")]
+    public string Name { get; set; } = "";
+
+    /// <summary>Chinese port label, ≤ 2 chars.</summary>
+    [JsonProperty("nick")]
+    public string NickName { get; set; } = "";
+
+    /// <summary>Chinese hover-tip. Must end with <c>。</c>.</summary>
+    [JsonProperty("desc")]
+    public string Description { get; set; } = "";
+
+    /// <summary>Chinese tab name, e.g. <c>"参数"</c>.</summary>
+    [JsonProperty("cat")]
+    public string Category { get; set; } = "";
+
+    /// <summary>Original English Name (preserved for Bilingual / English modes).</summary>
+    [JsonProperty("nameEn", NullValueHandling = NullValueHandling.Ignore)]
+    public string? NameEn { get; set; }
+
+    /// <summary>Original English Description.</summary>
+    [JsonProperty("descEn", NullValueHandling = NullValueHandling.Ignore)]
+    public string? DescriptionEn { get; set; }
+
+    /// <summary>Original English Category.</summary>
+    [JsonProperty("catEn", NullValueHandling = NullValueHandling.Ignore)]
+    public string? CategoryEn { get; set; }
 
     /// <summary>
-    /// Chinese short name shown on the GH canvas title bar (the "nickname").
-    /// Falls back to <see cref="Name"/> when empty so the GHChinese-style
-    /// effect always has something to display.
-    /// </summary>
-    public string NickName { get; set; } = string.Empty;
-
-    /// <summary>English full name. Optional — used in bilingual mode.</summary>
-    public string NameEn { get; set; } = string.Empty;
-
-    /// <summary>
-    /// English short name shown on the GH canvas title bar in bilingual mode.
-    /// Falls back to <see cref="NameEn"/> when empty.
-    /// </summary>
-    public string NickNameEn { get; set; } = string.Empty;
-
-    public string Description { get; set; } = string.Empty;
-
-    /// <summary>English param name -> Chinese display name.</summary>
-    public Dictionary<string, string> Inputs { get; set; } = new();
-
-    public Dictionary<string, string> Outputs { get; set; } = new();
-
-    /// <summary>Origin of the entry.</summary>
-    public string Source { get; set; } = GHAITranslator.Core.TranslationSource.User;
-
-    /// <summary>Last update timestamp (ISO 8601). Used for AI cache eviction.</summary>
-    public string UpdatedAt { get; set; } = string.Empty;
-
-    /// <summary>
-    /// True when the entry has at least one piece of Chinese text. Entries
-    /// with no Chinese at all are treated as "no translation available" by
-    /// the display layer so the component keeps its original English text
-    /// instead of being rewritten to "".
+    /// Returns <c>true</c> when every mandatory field is non-empty.
     /// </summary>
     [JsonIgnore]
-    public bool HasChinese =>
-        !string.IsNullOrEmpty(Name) || !string.IsNullOrEmpty(NickName);
+    public bool IsComplete =>
+        !string.IsNullOrWhiteSpace(Key) &&
+        !string.IsNullOrWhiteSpace(Name) &&
+        !string.IsNullOrWhiteSpace(NickName) &&
+        !string.IsNullOrWhiteSpace(Description) &&
+        !string.IsNullOrWhiteSpace(Category);
 }

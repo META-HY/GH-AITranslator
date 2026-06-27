@@ -1,0 +1,19 @@
+<Project>
+  <!-- Allow GH_SDK / RHINO_SDK to point at unpacked SDKs. On CI these come
+       from a step that unzips the NuGet packages into $RUNNER_TEMP. On a
+       dev box, set GH_SDK / RHINO_SDK env vars or hard-code the path
+       below to a known unpacked location. -->
+
+  <PropertyGroup Condition=" '$(GH_SDK)' == '' ">
+    <GH_SDK>/opt/data/home/.nuget/packages/grasshopper/8.25.25314.11001/lib/net48</GH_SDK>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(GH_SDK_N7)' == '' ">
+    <GH_SDK_N7>/opt/data/home/.nuget/packages/grasshopper/8.25.25314.11001/lib/net7.0</GH_SDK_N7>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(RHINO_SDK)' == '' ">
+    <RHINO_SDK>/opt/data/home/.nuget/packages/rhinocommon/8.25.25314.11001/lib/net48</RHINO_SDK>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(RHINO_SDK_N7)' == '' ">
+    <RHINO_SDK_N7>/opt/data/home/.nuget/packages/rhinocommon/8.25.25314.11001/lib/net7.0</RHINO_SDK_N7>
+  </PropertyGroup>
+</Project>

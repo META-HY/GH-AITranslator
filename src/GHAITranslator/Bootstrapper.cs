@@ -1,169 +1,161 @@
-// Composition root: wires together the Core services and the Rhino-side adapters.
-// Lives separately from the plugin class so the same wiring can be exercised
-// from a unit test by calling Bootstrapper.Initialize(testRoot: ...).
-
 using System;
-using System.IO;
+using System.Collections.Generic;
 using GHAITranslator.Core;
-using GHAITranslator.Core.AI;
-using GHAITranslator.Core.Packs;
+using GHAITranslator.Core.Models;
 using GHAITranslator.Integration;
+using GH = Grasshopper;
+using Grasshopper;
+using Grasshopper.Kernel;
 
-namespace GHAITranslator
+namespace GHAITranslator;
+
+/// <summary>
+/// Plugin startup and shutdown. Held statically so the GC doesn't collect
+/// event subscriptions that hook into GH lifetime.
+/// </summary>
+public static class Bootstrapper
 {
-    internal static class Bootstrapper
+    private static TranslationDictionary? _dict;
+    private static PluginSettings?        _settings;
+    private static TranslationPipeline?   _pipeline;
+    private static DocumentHook?          _docHook;
+    private static SettingsMenu?          _menu;
+
+    public static void Initialize()
     {
-        private static TranslationDictionary _dict;
-        private static PluginSettings _settings;
-        private static TranslationPipeline _pipeline;
-        private static ComponentTranslator _translator;
-        private static DocumentHook _documentHook;
-        private static HttpAiClient _aiClient;
-        private static SettingsMenu _menu;
-
-        public static TranslationPipeline Pipeline => _pipeline;
-        public static TranslationDictionary Dictionary => _dict;
-        public static PluginSettings Settings => _settings;
-
-        public static void Initialize(string appDataOverride = null)
+        try
         {
-            if (_dict != null) return; // idempotent
+            // 1. Load settings (defaults if file missing/corrupt)
+            _settings = SettingsStore.Load();
 
-            var rhinoVersion = DetectRhinoVersion();
-            var dictPath = PluginPaths.GetDictionaryPath(rhinoVersion, appDataOverride);
-            var settingsPath = PluginPaths.GetSettingsPath(rhinoVersion, appDataOverride);
-            var logPath = PluginPaths.GetLogPath(rhinoVersion, appDataOverride);
+            // 2. Build dictionary: BuiltinSeed always merged + user overlay
+            var dict = new TranslationDictionary(BuiltinSeed.All);
+            var overlay = DictionaryIo.Load(PluginPaths.DictionaryFile);
+            dict.MergeOverlay(overlay.Entries);
+            _dict = dict;
 
-            Log.Bind(logPath);
-            Log.Info($"Bootstrap starting. Rhino={rhinoVersion}, dict={dictPath}");
+            // 3. Build AI pipeline (HttpAiClient + TranslationPipeline)
+            var http = new HttpAiClient(_settings.Ai);
+            _pipeline = new TranslationPipeline(_dict, http, OnPipelinePersist);
 
-            _dict = new TranslationDictionary(dictPath);
-            _dict.Load();
+            // 4. Hook document lifecycle
+            _docHook = new DocumentHook(
+                () => _dict!,
+                () => _settings!,
+                OnPipelinePersist);
+            _docHook.Attach();
 
-            _settings = SettingsStore.Load(settingsPath);
+            // 5. Install menu
+            _menu = new SettingsMenu(
+                () => _settings!,
+                SetLanguageMode,
+                TranslateAll,
+                RestoreAll);
+            _menu.Install();
 
-            _aiClient = new HttpAiClient(_settings);
-            _pipeline = new TranslationPipeline(_dict, _aiClient, maxConcurrency: 3);
-
-            _translator = new ComponentTranslator(_dict);
-            _documentHook = new DocumentHook(_translator);
-            // Apply the user's saved language mode to any documents that
-            // are already open at the moment the plugin loads. (Document
-            // add events handle everything opened afterwards.)
-            _documentHook.SetMode(_settings.Mode);
-            _documentHook.Install();
-
-            // third-party packs
-            try
-            {
-                foreach (var p in ThirdPartyPacks.All) _dict.AddPack(p);
-            }
-            catch (Exception ex) { Log.Error("Pack registration failed", ex); }
-
-            // menu — registered LATER, once Grasshopper's UI is fully up.
-            // Calling SettingsMenu.Install() from the static cctor fails
-            // silently because Grasshopper.Instances.DocumentEditor and
-            // its MainMenuStrip are not yet initialised when the assembly
-            // is first discovered. Schedule a one-shot install that fires
-            // off the WinForms message loop (Application.Idle) instead.
-            try
-            {
-                _menu = new SettingsMenu();
-                ScheduleMenuInstall();
-            }
-            catch (Exception ex) { Log.Error("Menu scheduling failed", ex); }
-
-            Log.Info($"Bootstrap done. Dictionary entries: {_dict.Count}");
+            Log.Info($"GH-AITranslator-Pro loaded. dict={_dict.Count} entries, mode={_settings.LanguageMode}");
         }
-
-        private static System.Windows.Forms.Timer _menuInstallTimer;
-
-        private static void ScheduleMenuInstall()
+        catch (Exception ex)
         {
-            // Timer that polls for the GH MainMenuStrip every 250ms. As soon
-            // as it appears, we install the menu and stop the timer. The
-            // Application.Idle event isn't available in the static cctor
-            // (the message loop isn't running yet) so a WinForms Timer is
-            // the cleanest cross-version way to defer.
-            _menuInstallTimer?.Dispose();
-            _menuInstallTimer = new System.Windows.Forms.Timer { Interval = 250 };
-            _menuInstallTimer.Tick += (_, _) =>
-            {
-                try
-                {
-                    var editor = Grasshopper.Instances.DocumentEditor;
-                    if (editor == null) return;
-                    var menu = editor.MainMenuStrip;
-                    if (menu == null) return;
-
-                    _menu.Install();
-                    _menuInstallTimer.Stop();
-                    _menuInstallTimer.Dispose();
-                    _menuInstallTimer = null;
-                    Log.Info("Menu installed (delayed).");
-                }
-                catch (Exception ex)
-                {
-                    Log.Error("Delayed menu install failed", ex);
-                    _menuInstallTimer?.Stop();
-                    _menuInstallTimer?.Dispose();
-                    _menuInstallTimer = null;
-                }
-            };
-            _menuInstallTimer.Start();
+            Log.Error("Bootstrapper.Initialize failed", ex);
+            ShowFatal(ex);
         }
+    }
 
-        public static void Shutdown()
+    private static void SetLanguageMode(LanguageMode mode)
+    {
+        if (_settings == null) return;
+        _settings.LanguageMode = mode;
+        SettingsStore.Save(_settings);
+    }
+
+    /// <summary>
+    /// Re-translate every object on every open canvas. Triggered by the
+    /// "翻译当前画布" menu item.
+    /// </summary>
+    public static void TranslateAll()
+    {
+        if (_dict == null || _settings == null) return;
+        var mode = _settings.LanguageMode;
+        var translated = 0;
+        foreach (var doc in Instances.DocumentServer.DocumentNames())
         {
-            try { _menuInstallTimer?.Dispose(); _menuInstallTimer = null; } catch { /* best-effort */ }
-            try { _menu?.Dispose(); } catch (Exception ex) { Log.Error("menu dispose", ex); }
-            try { _documentHook?.Dispose(); } catch (Exception ex) { Log.Error("document hook dispose", ex); }
-            try { _dict?.Save(); } catch (Exception ex) { Log.Error("dict save", ex); }
-            try
+            var d = Instances.DocumentServer[doc];
+            if (d == null) continue;
+            foreach (var obj in d.Objects)
             {
-                if (_settings != null)
-                {
-                    var rhinoVersion = DetectRhinoVersion();
-                    SettingsStore.Save(PluginPaths.GetSettingsPath(rhinoVersion), _settings);
-                }
+                var key = GhAdapter.KeyFor(obj);
+                var entry = _dict.Get(key);
+                if (entry == null) continue;
+                if (ComponentTranslator.ApplyToObject(obj, entry, mode))
+                    translated++;
             }
-            catch (Exception ex) { Log.Error("settings save", ex); }
-
-            _aiClient?.Dispose();
-            _aiClient = null;
-            _documentHook = null;
-            _translator = null;
-            _pipeline = null;
-            _dict = null;
-            _settings = null;
         }
+        try { Instances.InvalidateCanvas(); Instances.RedrawCanvas(); } catch { }
+        Log.Info($"TranslateAll: {translated} object(s) updated to mode={mode}.");
+    }
 
-        public static void NotifySettingsChanged()
+    /// <summary>
+    /// Restore every object's English Name / Description / Category from
+    /// <see cref="TranslationEntry.NameEn"/> etc.
+    /// </summary>
+    public static void RestoreAll()
+    {
+        if (_dict == null) return;
+        var restored = 0;
+        foreach (var docName in Instances.DocumentServer.DocumentNames())
         {
-            if (_settings == null || _documentHook == null) return;
-            // Re-apply the current language mode to every open document
-            // so changes like API key / target language take effect on
-            // the canvas immediately.
-            _documentHook.SetMode(_documentHook.CurrentMode);
+            var d = Instances.DocumentServer[docName];
+            if (d == null) continue;
+            foreach (var obj in d.Objects)
+            {
+                var key = GhAdapter.KeyFor(obj);
+                var entry = _dict.Get(key);
+                if (entry == null) continue;
+                if (ComponentTranslator.RestoreEnglish(obj, entry))
+                    restored++;
+            }
         }
+        try { Instances.InvalidateCanvas(); Instances.RedrawCanvas(); } catch { }
+        Log.Info($"RestoreAll: {restored} object(s) restored to English.");
+    }
 
-        private static string DetectRhinoVersion()
+    private static void OnPipelinePersist(string key, bool immediate)
+    {
+        if (_dict == null) return;
+        try
         {
-            // Rhino 7 ships .NET 4.8; Rhino 8 ships .NET 7. We don't have a
-            // clean compile-time switch for "which Rhino is hosting us" inside
-            // a single binary, so we sniff the running Rhino major version.
-            // Fallback to "7.0" — that data path already exists for both releases
-            // in our testing environment and the user can re-migrate.
-            try
+            var overlay = new DictionaryIo.OverlayFile { Entries = new List<TranslationEntry>() };
+            foreach (var e in _dict.All())
             {
-                var v = Rhino.RhinoApp.Version;
-                if (v != null && v.Major >= 8) return "8.0";
+                // Only persist user-added entries (not BuiltinSeed).
+                if (!e.Key.StartsWith(ComponentKey.NativePrefix, StringComparison.Ordinal)) continue;
+                if (e.NameEn == null) continue;          // BuiltinSeed entries carry NameEn
+                overlay.Entries.Add(e);
             }
-            catch
-            {
-                // Rhino not loaded (e.g. unit test) — keep default.
-            }
-            return "7.0";
+            DictionaryIo.Save(PluginPaths.DictionaryFile, overlay);
         }
+        catch (Exception ex)
+        {
+            Log.Warn($"OnPipelinePersist failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Show a fatal-error dialog so the user knows what happened instead of
+    /// silently failing. Visible because the plugin won't load otherwise.
+    /// </summary>
+    public static void ShowFatal(Exception ex)
+    {
+        try
+        {
+            System.Windows.Forms.MessageBox.Show(
+                "GH-AITranslator-Pro 加载失败:\n\n" + ex.Message +
+                "\n\n详见 " + PluginPaths.LogFile,
+                "GH-AITranslator-Pro",
+                System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Error);
+        }
+        catch { /* give up */ }
     }
 }

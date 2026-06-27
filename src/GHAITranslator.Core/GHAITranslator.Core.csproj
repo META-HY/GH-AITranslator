@@ -1,22 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
+    <!-- The plugin itself targets net48 + net7.0-windows (see
+         src/GHAITranslator). The Core library is referenced by both the
+         plugin (Windows-only) and the test project (net8.0). We need a
+         single library assembly that can be consumed by all three targets.
+         Adding net8.0 keeps the test project happy on Linux CI. -->
     <TargetFrameworks>net8.0;net48;net7.0-windows</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
-    <LangVersion>10.0</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>CS1591;CS8618;CS8625</NoWarn>
+    <AssemblyName>GH-AITranslator.Core</AssemblyName>
     <RootNamespace>GHAITranslator.Core</RootNamespace>
-    <AssemblyName>GHAITranslator.Core</AssemblyName>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591;CS8604</NoWarn>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <UseWindowsForms>false</UseWindowsForms>
+    <UseWPF>false</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
-
-  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
-    <Reference Include="System.Net.Http" />
-  </ItemGroup>
-
 </Project>

@@ -1,224 +1,107 @@
-# Build GH-AITranslator plugin (.gha) for both Rhino 7 and Rhino 8.
-#
-# The .gha assembly is a renamed .NET DLL that Grasshopper loads from
-# %APPDATA%\Grasshopper\Libraries\. We build two flavors from one source:
-#   * net48      → Rhino 7
-#   * net7.0-windows → Rhino 8
-#
-# GH SDKs ship as NuGet packages (RhinoCommon + Grasshopper) so we don't
-# need a Rhino install on the runner — the Windows VM only needs the .NET
-# SDK. We do enable Windows targeting so MSBuild treats it as a Windows
-# build.
-#
-# Artifact packaging:
-#   Each flavor gets its OWN zip — `gha-rhino7` and `gha-rhino8`. Inside
-#   each zip is EVERY file the user must drop into Libraries:
-#     * GH-AITranslator-rhino{N}.gha       (the renamed entry-point dll)
-#     * GHAITranslator.Core.dll             (our Core assembly, side-car)
-#     * Newtonsoft.Json.dll                 (NuGet dep — GH does NOT auto-
-#                                            resolve it, must sit next to .gha)
-#   User flow: download ONE zip → unzip → copy ALL files into Libraries.
-#   No more "I only got the .gha, now what" confusion.
-
 name: build-gha
 
 on:
   push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
+    branches: [main]
+    tags: ['v*']
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write  # only needed for tag-driven releases
+  contents: write   # for creating GitHub Releases
 
 jobs:
-  build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
-
+  build-test:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          globaljson: ./global.json
+      - name: Restore
+        run: dotnet restore GH-AITranslator.sln
+      - name: Build Core (net8.0)
+        run: dotnet build src/GHAITranslator.Core/GHAITranslator.Core.csproj -c Release -f net8.0 --no-restore
+      - name: Test
+        run: dotnet test tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --no-build --verbosity normal
 
-      - name: Setup .NET 8 SDK
-        uses: actions/setup-dotnet@v5
+  build-gha:
+    needs: build-test
+    strategy:
+      matrix:
+        include:
+          - os: windows-2022
+            tfm: net48
+            rid: win-x64
+            flavor: rhino7
+          - os: windows-2022
+            tfm: net7.0-windows
+            rid: win-x64
+            flavor: rhino8
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rhino 8 / GH 8.25 SDK (for both flavors — Rhino 7 SDK is bundled inside)
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Restore + sanity-check Core and tests
+      - name: Fetch GH SDK NuGet
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/gh-sdk"
+          nuget sources add -Name gh -Source https://www.nuget.org/api/v2 -Force 2>&1 | Out-Null
+          # Grasshopper ships two NuGet flavors: 7.x for R7, 8.x for R8.
+          nuget install grasshopper -Version 7.0.20314.3001 -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
+          nuget install grasshopper -Version 8.25.25314.11001 -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
+          nuget install rhinocommon -Version 8.25.25314.11001 -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
+          Get-ChildItem -Recurse "$env:RUNNER_TEMP/gh-sdk" | Where-Object { $_.Name -eq "*.dll" } | Select-Object -First 20 FullName
+
+      - name: Build
         shell: pwsh
         env:
-          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
-          DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+          GH_SDK:     ${{ format('{0}/gh-sdk/grasshopper/7.0.20314.3001/lib/net48', env.RUNNER_TEMP) }}
+          RHINO_SDK:  ${{ format('{0}/gh-sdk/rhinocommon/8.25.25314.11001/lib/net48', env.RUNNER_TEMP) }}
+          GH_SDK_N7:  ${{ format('{0}/gh-sdk/grasshopper/8.25.25314.11001/lib/net7.0', env.RUNNER_TEMP) }}
+          RHINO_SDK_N7: ${{ format('{0}/gh-sdk/rhinocommon/8.25.25314.11001/lib/net7.0', env.RUNNER_TEMP) }}
         run: |
-          $ErrorActionPreference = "Stop"
-          dotnet --info | Tee-Object -FilePath "${{ runner.temp }}\dotnet-info.txt" | Out-Host
-          try {
-            # Restore the three projects so the per-step restore actions below
-            # can be removed (single restore is more reliable — split restores
-            # with -p:TargetFramework don't actually scope the assets file and
-            # can leave the project.assets.json out of sync with what the
-            # subsequent build steps need).
-            dotnet restore src/GHAITranslator/GHAITranslator.csproj          -p:EnableWindowsTargeting=true
-            dotnet restore src/GHAITranslator.Core/GHAITranslator.Core.csproj
-            dotnet restore tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj
+          dotnet build src/GHAITranslator/GHAITranslator.csproj -c Release -f ${{ matrix.tfm }}
 
-            # Sanity-check the test build BEFORE we go near Rhino — if Core
-            # or the unit tests are broken, we want a fast fail with a clear
-            # log instead of a 5-minute Rhino build that masks the real cause.
-            dotnet build  src/GHAITranslator.Core/GHAITranslator.Core.csproj -c Release --no-restore
-            dotnet test   tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --logger "console;verbosity=normal"
-          } catch {
-            Write-Host "::error::$_"
-            exit 1
-          }
-
-      - name: Build Rhino 7 .gha (net48, Release)
+      - name: Stage .gha + side-by-side Newtonsoft.Json
         shell: pwsh
-        env:
-          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
         run: |
-          $ErrorActionPreference = "Stop"
-          # Stage directory for THIS flavor. Build the entire payload here,
-          # then zip and upload it as `gha-rhino7`. Using a separate dir
-          # means the R7 and R8 payloads never collide if a future change
-          # runs them in parallel stages.
-          $stage = "dist/rhino7"
-          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $ghaDir = "artifacts/${{ matrix.flavor }}"
+          New-Item -ItemType Directory -Force -Path $ghaDir | Out-Null
+          $built = Get-ChildItem -Recurse -Filter "GH-AITranslator.${{ matrix.tfm }}.dll" -Path "src/GHAITranslator/bin/Release"
+          if ($built.Count -eq 0) { throw "Built .dll not found for ${{ matrix.tfm }}" }
+          $core = Get-ChildItem -Recurse -Filter "GH-AITranslator.Core.dll" -Path "src/GHAITranslator.Core/bin/Release" | Where-Object { $_.DirectoryName -like "*${{ matrix.tfm }}*" }
+          $newton = Get-ChildItem -Recurse -Filter "Newtonsoft.Json.dll" -Path "src/GHAITranslator/bin/Release" | Where-Object { $_.DirectoryName -like "*${{ matrix.tfm }}*" }
+          Copy-Item $built[0].FullName   "$ghaDir/GH-AITranslator.gha"
+          if ($core)   { Copy-Item $core[0].FullName   "$ghaDir/GH-AITranslator.Core.dll" }
+          if ($newton) { Copy-Item $newton[0].FullName "$ghaDir/Newtonsoft.Json.dll" }
+          Get-ChildItem $ghaDir
 
-          dotnet build src/GHAITranslator/GHAITranslator.csproj `
-            -c Release `
-            -f net48 `
-            -p:EnableWindowsTargeting=true
-          $binR7 = "src/GHAITranslator/bin/Release/net48"
-          if (-not (Test-Path "$binR7/GH-AITranslator.dll")) {
-            Write-Host "::error::Build did not produce $binR7/GH-AITranslator.dll"
-            Get-ChildItem $binR7 -ErrorAction SilentlyContinue | Format-Table Name
-            exit 1
-          }
-
-          # Copy the entry-point DLL to its final .gha filename. GH's loader
-          # looks at the .gha extension and reads GH_AssemblyInfo from it.
-          Copy-Item -Path "$binR7/GH-AITranslator.dll" -Destination "$stage/GH-AITranslator-rhino7.gha" -Force
-          # Side-car DLLs MUST keep their .dll extension — GH resolves them by
-          # filename next to the .gha. Without these:
-          #   - Core.dll missing → FileNotFoundException at first method call
-          #   - Newtonsoft.Json.dll missing → FileNotFoundException in cctor →
-          #     menu silently never registers (the bug we hit at #10).
-          Copy-Item -Path "$binR7/GHAITranslator.Core.dll" -Destination $stage/ -Force
-          $newtonsoft = Get-ChildItem `
-            -Path "$env:USERPROFILE/.nuget/packages/newtonsoft.json/13.0.3/lib/net45" `
-            -Filter "Newtonsoft.Json.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($newtonsoft) {
-            Copy-Item -Path $newtonsoft.FullName -Destination $stage/ -Force
-            Write-Host "Copied Newtonsoft.Json from $($newtonsoft.FullName)"
-          } else {
-            Write-Host "::error::Newtonsoft.Json.dll not found in NuGet cache — GHA WILL fail to load on user machines"
-            exit 1
-          }
-
-          # Build the zip the user actually downloads.
-          #
-          # We deliberately use [System.IO.Compression.ZipFile]::CreateFromDirectory
-          # rather than the Compress-Archive cmdlet. Compress-Archive lives in
-          # the Microsoft.PowerShell.Archive module which is not preloaded on
-          # the pwsh that ships with windows-latest runners — its first use in
-          # a script emits the error:
-          #   "The 'Compress-Archive' command was found in the module
-          #    'Microsoft.PowerShell.Archive', but the module could not be
-          #    loaded."
-          # ZipFile.CreateFromDirectory is the .NET BCL API behind that
-          # cmdlet and is always available — no module discovery needed.
-          Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-          $zip = "dist/gha-rhino7.zip"
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
-          Write-Host "Rhino 7 package contents:"
-          Get-ChildItem $stage | Format-Table Name, Length
-          Write-Host "Zip contents:"
-          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
-          try {
-            $archive.Entries | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize
-          } finally {
-            $archive.Dispose()
-          }
-
-      - name: Build Rhino 8 .gha (net7.0-windows, Release)
-        shell: pwsh
-        env:
-          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
-        run: |
-          $ErrorActionPreference = "Stop"
-          $stage = "dist/rhino8"
-          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-          New-Item -ItemType Directory -Path $stage -Force | Out-Null
-
-          dotnet build src/GHAITranslator/GHAITranslator.csproj `
-            -c Release `
-            -f net7.0-windows `
-            -p:EnableWindowsTargeting=true
-          $binR8 = "src/GHAITranslator/bin/Release/net7.0-windows"
-          if (-not (Test-Path "$binR8/GH-AITranslator.dll")) {
-            Write-Host "::error::Build did not produce $binR8/GH-AITranslator.dll"
-            Get-ChildItem $binR8 -ErrorAction SilentlyContinue | Format-Table Name
-            exit 1
-          }
-
-          Copy-Item -Path "$binR8/GH-AITranslator.dll" -Destination "$stage/GH-AITranslator-rhino8.gha" -Force
-          Copy-Item -Path "$binR8/GHAITranslator.Core.dll" -Destination $stage/ -Force
-          $newtonsoft = Get-ChildItem `
-            -Path "$env:USERPROFILE/.nuget/packages/newtonsoft.json/13.0.3/lib/net45" `
-            -Filter "Newtonsoft.Json.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($newtonsoft) {
-            Copy-Item -Path $newtonsoft.FullName -Destination $stage/ -Force
-            Write-Host "Copied Newtonsoft.Json from $($newtonsoft.FullName)"
-          } else {
-            Write-Host "::error::Newtonsoft.Json.dll not found in NuGet cache — GHA WILL fail to load on user machines"
-            exit 1
-          }
-
-          $zip = "dist/gha-rhino8.zip"
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          # See R7 step for why we don't use Compress-Archive here.
-          Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-          [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
-          Write-Host "Rhino 8 package contents:"
-          Get-ChildItem $stage | Format-Table Name, Length
-          Write-Host "Zip contents:"
-          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
-          try {
-            $archive.Entries | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize
-          } finally {
-            $archive.Dispose()
-          }
-
-      - name: Upload Rhino 7 package
+      - name: Upload .gha artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gha-rhino7
-          path: dist/gha-rhino7.zip
+          name: gha-${{ matrix.flavor }}
+          path: artifacts/${{ matrix.flavor }}/*
           if-no-files-found: error
-          retention-days: 30
 
-      - name: Upload Rhino 8 package
-        uses: actions/upload-artifact@v4
+  release:
+    needs: build-gha
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          name: gha-rhino8
-          path: dist/gha-rhino8.zip
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Attach .gha to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+          path: artifacts
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/gha-rhino7.zip
-            dist/gha-rhino8.zip
+            artifacts/gha-rhino7/*
+            artifacts/gha-rhino8/*
           generate_release_notes: true

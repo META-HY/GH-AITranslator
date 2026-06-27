@@ -1,35 +1,27 @@
-using System.Collections.Generic;
-
 namespace GHAITranslator.Core.Models;
 
 /// <summary>
-/// Component metadata used as the translation source-of-truth.
-/// Designed to be Rhino-free so it can be unit-tested on any platform.
+/// Metadata that the AI translation pipeline needs to produce a
+/// <see cref="TranslationEntry"/>. Captured from a real GH_Component instance
+/// before calling the AI; never persisted.
 /// </summary>
-public class ComponentInfo
+public sealed class ComponentInfo
 {
-    /// <summary>Stable unique key: "{PluginName}_{ComponentName}".</summary>
-    public string Key { get; set; } = string.Empty;
+    public string ClassName { get; init; } = "";
+    public string FullName  { get; init; } = "";   // Namespace.ClassName
+    public string Assembly  { get; init; } = "";   // e.g. "Grasshopper" or "Heron"
+    public string Category  { get; init; } = "";
+    public string SubCategory { get; init; } = "";
+    public string OriginalName { get; init; } = "";
+    public string OriginalNickName { get; init; } = "";
+    public string OriginalDescription { get; init; } = "";
+    public string ComponentGuid { get; init; } = "";
 
-    /// <summary>Original component name (internal).</summary>
-    public string Name { get; set; } = string.Empty;
-
-    /// <summary>Display nickname shown in Grasshopper.</summary>
-    public string NickName { get; set; } = string.Empty;
-
-    /// <summary>English description from the component author.</summary>
-    public string Description { get; set; } = string.Empty;
-
-    /// <summary>Source plugin / library name. Defaults to "Native" when missing.</summary>
-    public string PluginName { get; set; } = "Native";
-
-    public ParamInfo[] InputParams { get; set; } = System.Array.Empty<ParamInfo>();
-    public ParamInfo[] OutputParams { get; set; } = System.Array.Empty<ParamInfo>();
-}
-
-public class ParamInfo
-{
-    public string Name { get; set; } = string.Empty;
-    public string NickName { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
+    /// <summary>
+    /// Stable lookup key. Format:
+    ///   Built-in GH: <c>"Native_Point"</c>
+    ///   Third-party: <c>"Heron_HeronGh"</c>
+    ///   User-saved:  <c>"User_HeronGh_&lt;guid&gt;"</c>
+    /// </summary>
+    public string LookupKey { get; init; } = "";
 }

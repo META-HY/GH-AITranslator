@@ -1,52 +1,51 @@
 using System;
+using System.IO;
+using System.Text;
 
 namespace GHAITranslator.Core;
 
 /// <summary>
-/// Lightweight logger that writes to %AppData%\...\plugin.log. We avoid pulling
-/// in a third-party logging framework for the P0 milestone — the host
-/// (Rhino) already has its own diagnostics, so this is best-effort.
+/// Minimal file logger. No external dependency. <see cref="Warn"/> logs are
+/// always written; <see cref="Info"/> is silent in production to avoid disk
+/// spam. <see cref="Error"/> writes with a stack trace.
 /// </summary>
 public static class Log
 {
     private static readonly object _gate = new();
-    private static string? _path;
+    private static readonly StringBuilder _buffer = new();
+    private const int MaxBufferedLines = 500;
 
-    public static void Bind(string logFilePath)
+    public static void Info(string msg)  => Append("INFO",  msg, null);
+    public static void Warn(string msg)  => Append("WARN",  msg, null);
+    public static void Error(string msg, Exception? ex = null) => Append("ERROR", msg, ex);
+
+    private static void Append(string level, string msg, Exception? ex)
     {
-        _path = logFilePath;
-        try
-        {
-            var dir = System.IO.Path.GetDirectoryName(logFilePath);
-            if (!string.IsNullOrEmpty(dir)) System.IO.Directory.CreateDirectory(dir);
-        }
-        catch
-        {
-            _path = null;
-        }
-    }
-
-    public static void Info(string message) => Write("INFO", message);
-    public static void Warn(string message) => Write("WARN", message);
-    public static void Error(string message, Exception? ex = null)
-        => Write("ERROR", ex == null ? message : $"{message} | {ex.GetType().Name}: {ex.Message}");
-
-    private static void Write(string level, string message)
-    {
-        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}";
-        System.Diagnostics.Debug.WriteLine(line);
+        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {msg}";
+        if (ex != null) line += $"\n{ex}";
 
         lock (_gate)
         {
-            if (_path == null) return;
-            try
+            _buffer.AppendLine(line);
+            if (_buffer.Length > 80_000)
             {
-                System.IO.File.AppendAllText(_path, line + Environment.NewLine);
+                // Trim to last half to bound disk usage.
+                _buffer.Remove(0, _buffer.Length / 2);
             }
-            catch
-            {
-                // Logging must never throw.
-            }
+            TryFlush();
+        }
+    }
+
+    private static void TryFlush()
+    {
+        try
+        {
+            Directory.CreateDirectory(PluginPaths.UserDataDir);
+            File.WriteAllText(PluginPaths.LogFile, _buffer.ToString());
+        }
+        catch
+        {
+            // Logging must never crash the plugin.
         }
     }
 }

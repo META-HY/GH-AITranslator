@@ -29,4 +29,7 @@ Thumbs.db
 *.log
 
 # Don't ignore workflow / github dir
-!.github/
+!.github/# Untracked artifacts
+core
+*.bak
+*.tmp

@@ -5,17 +5,16 @@ using GHAITranslator.Core.Models;
 namespace GHAITranslator.Core;
 
 /// <summary>
-/// LLM transport. Defined in Core (not in the plugin) so the dispatcher can be
-/// unit-tested with a fake implementation; the real HTTP client lives in the
-/// Plugin layer.
+/// Abstraction over an AI translation provider. Implementations must be
+/// thread-safe (multiple components may translate concurrently).
 /// </summary>
 public interface IAiClient
 {
     /// <summary>
-    /// Translate one component. Implementations MUST NOT throw on a 4xx/5xx —
-    /// return <c>null</c> and let the caller decide whether to log/continue.
+    /// Translate a single component's metadata into a
+    /// <see cref="TranslationEntry"/>. Implementations should retry on
+    /// transient errors and never throw for non-AI reasons (return null on
+    /// unrecoverable failure).
     /// </summary>
-    Task<TranslationEntry?> TranslateAsync(
-        ComponentInfo component,
-        CancellationToken cancellationToken = default);
+    Task<TranslationEntry?> TranslateAsync(ComponentInfo info, CancellationToken ct = default);
 }

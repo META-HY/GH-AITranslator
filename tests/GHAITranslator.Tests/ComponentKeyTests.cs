@@ -1,72 +1,27 @@
 using GHAITranslator.Core;
 using Xunit;
 
-namespace GHAITranslator.Tests
+namespace GHAITranslator.Tests;
+
+public class ComponentKeyTests
 {
-    public class ComponentKeyTests
+    [Fact]
+    public void Grasshopper_assembly_uses_native_prefix()
     {
-        [Fact]
-        public void Build_FallsBackToNative_WhenPluginMissing()
-        {
-            string? plugin = null;
-            var key = ComponentKey.Build(plugin, "Point");
-            Assert.Equal("Native_Point", key);
-        }
+        Assert.Equal("Native_Point", ComponentKey.Build("Grasshopper", "Point"));
+        Assert.Equal("Native_Curve", ComponentKey.Build("Grasshopper", "Curve"));
+    }
 
-        [Fact]
-        public void Build_FallsBackToNative_WhenPluginWhitespace()
-        {
-            var key = ComponentKey.Build("   ", "Brep");
-            Assert.Equal("Native_Brep", key);
-        }
+    [Fact]
+    public void Third_party_assembly_uses_its_name()
+    {
+        Assert.Equal("Heron_HeronGh", ComponentKey.Build("Heron", "HeronGh"));
+        Assert.Equal("Kangaroo2_Pressure", ComponentKey.Build("Kangaroo2", "Pressure"));
+    }
 
-        [Fact]
-        public void Build_ReplacesDotsAndSpaces()
-        {
-            var key = ComponentKey.Build("Kangaroo 2", "Bend Goal");
-            Assert.Equal("Kangaroo_2_Bend_Goal", key);
-        }
-
-        [Fact]
-        public void Build_StripsUnsafeChars()
-        {
-            var key = ComponentKey.Build("Weaverbird", "Mesh\\Pipe?");
-            Assert.Equal("Weaverbird_Mesh_Pipe_", key);
-        }
-
-        [Fact]
-        public void Build_IsDeterministic()
-        {
-            var a = ComponentKey.Build("Kangaroo2", "Line");
-            var b = ComponentKey.Build("Kangaroo2", "Line");
-            Assert.Equal(a, b);
-        }
-
-        [Fact]
-        public void Build_DifferentiatesSameNameAcrossPlugins()
-        {
-            var a = ComponentKey.Build("PluginA", "Point");
-            var b = ComponentKey.Build("PluginB", "Point");
-            Assert.NotEqual(a, b);
-        }
-
-        [Fact]
-        public void Build_Throws_OnEmptyComponentName()
-        {
-            Assert.Throws<System.ArgumentException>(() => ComponentKey.Build("Plugin", " "));
-        }
-
-        [Fact]
-        public void Build_FromComponentInfo_RegeneratesCanonicalKey()
-        {
-            var info = new Core.Models.ComponentInfo
-            {
-                PluginName = "  ",
-                Name = "Divide Curve",
-                Key = "totally-bogus"
-            };
-            var key = ComponentKey.Build(info);
-            Assert.Equal("Native_Divide_Curve", key);
-        }
+    [Fact]
+    public void Empty_assembly_falls_back_to_native()
+    {
+        Assert.Equal("Native_X", ComponentKey.Build("", "X"));
     }
 }

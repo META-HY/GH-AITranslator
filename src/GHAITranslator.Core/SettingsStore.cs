@@ -5,37 +5,44 @@ using Newtonsoft.Json;
 namespace GHAITranslator.Core;
 
 /// <summary>
-/// Loads and persists <see cref="PluginSettings"/> as JSON. Mirrors the dictionary
-/// contract: missing file → defaults, corrupt file → defaults, IO failure → silent.
+/// Persists <see cref="PluginSettings"/> as JSON. Defaults are returned on
+/// any error so a corrupt file never blocks the plugin.
 /// </summary>
 public static class SettingsStore
 {
-    public static PluginSettings Load(string path)
+    public static PluginSettings Load()
     {
-        if (!File.Exists(path)) return new PluginSettings();
         try
         {
+            var path = PluginPaths.SettingsFile;
+            if (!File.Exists(path)) return new PluginSettings();
             var json = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(json)) return new PluginSettings();
             return JsonConvert.DeserializeObject<PluginSettings>(json) ?? new PluginSettings();
         }
-        catch
+        catch (Exception ex)
         {
+            Log.Warn($"SettingsStore.Load failed: {ex.Message}");
             return new PluginSettings();
         }
     }
 
-    public static void Save(string path, PluginSettings settings)
+    public static bool Save(PluginSettings settings)
     {
-        if (settings == null) return;
         try
         {
-            PluginPaths.EnsureDir(Path.GetDirectoryName(path) ?? string.Empty);
-            var json = JsonConvert.SerializeObject(settings, Formatting.Indented);
-            File.WriteAllText(path, json);
+            var path = PluginPaths.SettingsFile;
+            Directory.CreateDirectory(PluginPaths.UserDataDir);
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, JsonConvert.SerializeObject(settings, Formatting.Indented));
+            if (File.Exists(path)) File.Delete(path);
+            File.Move(tmp, path);
+            return true;
         }
-        catch
+        catch (Exception ex)
         {
-            // Save failure must not crash the host.
+            Log.Warn($"SettingsStore.Save failed: {ex.Message}");
+            return false;
         }
     }
 }

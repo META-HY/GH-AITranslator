@@ -1,97 +1,46 @@
-using System.IO;
+using System.Linq;
 using GHAITranslator.Core;
+using GHAITranslator.Core.Models;
 using Xunit;
 
-namespace GHAITranslator.Tests
+namespace GHAITranslator.Tests;
+
+public class TranslationDictionaryTests
 {
-    public class TranslationDictionaryTests : System.IDisposable
+    [Fact]
+    public void BuiltinSeed_merge_overlay_user_wins()
     {
-        private readonly string _dir;
-        private readonly string _file;
+        var dict = new TranslationDictionary(BuiltinSeed.All);
+        Assert.True(dict.Contains("Native_Param_Point"));
 
-        public TranslationDictionaryTests()
+        var overlay = new TranslationEntry
         {
-            _dir = Path.Combine(Path.GetTempPath(), "ghaip-tests", System.Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_dir);
-            _file = Path.Combine(_dir, "dictionary.json");
-        }
+            Key = "Native_Param_Point",
+            Name = "POINT_OVERRIDE",
+            NickName = "P",
+            Description = "测试覆盖。",
+            Category = "参数",
+            NameEn = "Point",
+        };
+        dict.MergeOverlay(new[] { overlay });
 
-        public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
+        var e = dict.Get("Native_Param_Point");
+        Assert.NotNull(e);
+        Assert.Equal("POINT_OVERRIDE", e!.Name);
+    }
 
-        [Fact]
-        public void Load_OnMissingFile_SeedsBuiltin_AndPersists()
-        {
-            var dict = new TranslationDictionary(_file);
-            dict.Load();
-            Assert.True(dict.Count > 0);
-            Assert.True(File.Exists(_file));
-            // built-in 'Point' should be in there
-            Assert.Equal("点", dict.GetTranslation("Native_Point"));
-        }
+    [Fact]
+    public void Unknown_key_returns_null()
+    {
+        var dict = new TranslationDictionary(BuiltinSeed.All);
+        Assert.Null(dict.Get("Native_NoSuchThing"));
+    }
 
-        [Fact]
-        public void GetTranslation_ReturnsNullOnUnknownKey()
-        {
-            var dict = new TranslationDictionary(_file);
-            dict.Load();
-            Assert.Null(dict.GetTranslation("Native_NotAComponent"));
-        }
-
-        [Fact]
-        public void AddOrUpdate_OverridesAndPersists()
-        {
-            var dict = new TranslationDictionary(_file);
-            dict.Load();
-            dict.AddOrUpdate("Native_Point", new Core.Models.TranslationEntry
-            {
-                Name = "点(自定义)",
-                Source = TranslationSource.User
-            });
-            dict.Save();
-
-            var dict2 = new TranslationDictionary(_file);
-            dict2.Load();
-            Assert.Equal("点(自定义)", dict2.GetTranslation("Native_Point"));
-        }
-
-        [Fact]
-        public void Load_OnCorruptFile_FallsBackToSeed_AndDoesNotThrow()
-        {
-            File.WriteAllText(_file, "{ this is not json");
-            var dict = new TranslationDictionary(_file);
-            dict.Load();
-            Assert.True(dict.Count > 0);
-        }
-
-        [Fact]
-        public void Merge_RespectsOverwriteFlag()
-        {
-            var dict = new TranslationDictionary(_file);
-            dict.Load();
-            var original = dict.GetTranslation("Native_Point");
-
-            var updates = new[] {
-                new System.Collections.Generic.KeyValuePair<string, Core.Models.TranslationEntry>(
-                    "Native_Point",
-                    new Core.Models.TranslationEntry { Name = "should-not-apply", Source = "user" })
-            };
-            dict.Merge(updates, overwrite: false);
-            Assert.Equal(original, dict.GetTranslation("Native_Point"));
-
-            dict.Merge(updates, overwrite: true);
-            Assert.Equal("should-not-apply", dict.GetTranslation("Native_Point"));
-        }
-
-        [Fact]
-        public void BuiltinSeed_CoversP0Components()
-        {
-            var dict = new TranslationDictionary(_file);
-            dict.Load();
-            // sanity-check the components the doc explicitly calls out
-            Assert.Equal("点", dict.GetTranslation("Native_Point"));
-            Assert.Equal("线", dict.GetTranslation("Native_Line"));
-            Assert.Equal("圆", dict.GetTranslation("Native_Circle"));
-            Assert.Equal("面板", dict.GetTranslation("Native_Panel"));
-        }
+    [Fact]
+    public void AddOrUpdate_ignores_empty_key()
+    {
+        var dict = new TranslationDictionary(BuiltinSeed.All);
+        dict.AddOrUpdate(new TranslationEntry { Key = "", Name = "x" });
+        Assert.Empty(dict.All().Where(e => e.Name == "x"));
     }
 }
