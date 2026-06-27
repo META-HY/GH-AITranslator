@@ -12,6 +12,10 @@ permissions:
   contents: write   # for creating GitHub Releases
 
 jobs:
+  # Ubuntu job: tests only. The plugin assembly targets net48 + net7.0-windows
+  # which is unsupported on Linux (NETSDK1100). We restore / build ONLY the
+  # Core library's net8.0 target plus the test project, both of which are
+  # Linux-friendly.
   build-test:
     runs-on: ubuntu-latest
     steps:
@@ -19,13 +23,17 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           globaljson: ./global.json
-      - name: Restore
-        run: dotnet restore GH-AITranslator.sln
+      - name: Restore Core (net8.0)
+        run: dotnet restore src/GHAITranslator.Core/GHAITranslator.Core.csproj -p:TargetFrameworks=net8.0
       - name: Build Core (net8.0)
         run: dotnet build src/GHAITranslator.Core/GHAITranslator.Core.csproj -c Release -f net8.0 --no-restore
+      - name: Restore Tests
+        run: dotnet restore tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj
       - name: Test
         run: dotnet test tests/GHAITranslator.Tests/GHAITranslator.Tests.csproj -c Release --no-build --verbosity normal
 
+  # Windows job: build the actual plugin .gha for R7 (net48) and R8
+  # (net7.0-windows). Matrix produced one GHA per flavor.
   build-gha:
     needs: build-test
     strategy:
@@ -33,39 +41,36 @@ jobs:
         include:
           - os: windows-2022
             tfm: net48
-            rid: win-x64
             flavor: rhino7
           - os: windows-2022
             tfm: net7.0-windows
-            rid: win-x64
             flavor: rhino8
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rhino 8 / GH 8.25 SDK (for both flavors — Rhino 7 SDK is bundled inside)
+      - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Fetch GH SDK NuGet
+      - name: Fetch GH + Rhino SDK NuGets
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/gh-sdk"
-          nuget sources add -Name gh -Source https://www.nuget.org/api/v2 -Force 2>&1 | Out-Null
-          # Grasshopper ships two NuGet flavors: 7.x for R7, 8.x for R8.
-          nuget install grasshopper -Version 7.0.20314.3001 -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
-          nuget install grasshopper -Version 8.25.25314.11001 -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
-          nuget install rhinocommon -Version 8.25.25314.11001 -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
-          Get-ChildItem -Recurse "$env:RUNNER_TEMP/gh-sdk" | Where-Object { $_.Name -eq "*.dll" } | Select-Object -First 20 FullName
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/gh-sdk" | Out-Null
+          # GH 7 + GH 8.25 SDKs + RhinoCommon 8.25
+          nuget install grasshopper  -Version 7.0.20314.3001   -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
+          nuget install grasshopper  -Version 8.25.25314.11001 -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
+          nuget install rhinocommon  -Version 8.25.25314.11001 -OutputDirectory "$env:RUNNER_TEMP/gh-sdk" -DirectDownload -Force 2>&1 | Out-Null
+          Get-ChildItem -Recurse "$env:RUNNER_TEMP/gh-sdk" | Where-Object { $_.Name -eq "*.dll" } | Select-Object FullName
 
-      - name: Build
+      - name: Build plugin for ${{ matrix.flavor }}
         shell: pwsh
         env:
-          GH_SDK:     ${{ format('{0}/gh-sdk/grasshopper/7.0.20314.3001/lib/net48', env.RUNNER_TEMP) }}
-          RHINO_SDK:  ${{ format('{0}/gh-sdk/rhinocommon/8.25.25314.11001/lib/net48', env.RUNNER_TEMP) }}
-          GH_SDK_N7:  ${{ format('{0}/gh-sdk/grasshopper/8.25.25314.11001/lib/net7.0', env.RUNNER_TEMP) }}
-          RHINO_SDK_N7: ${{ format('{0}/gh-sdk/rhinocommon/8.25.25314.11001/lib/net7.0', env.RUNNER_TEMP) }}
+          GH_SDK:        ${{ format('{0}/gh-sdk/grasshopper/7.0.20314.3001/lib/net48',   env.RUNNER_TEMP) }}
+          RHINO_SDK:     ${{ format('{0}/gh-sdk/rhinocommon/8.25.25314.11001/lib/net48', env.RUNNER_TEMP) }}
+          GH_SDK_N7:     ${{ format('{0}/gh-sdk/grasshopper/8.25.25314.11001/lib/net7.0',env.RUNNER_TEMP) }}
+          RHINO_SDK_N7:  ${{ format('{0}/gh-sdk/rhinocommon/8.25.25314.11001/lib/net7.0',env.RUNNER_TEMP) }}
         run: |
           dotnet build src/GHAITranslator/GHAITranslator.csproj -c Release -f ${{ matrix.tfm }}
 
@@ -75,10 +80,10 @@ jobs:
           $ghaDir = "artifacts/${{ matrix.flavor }}"
           New-Item -ItemType Directory -Force -Path $ghaDir | Out-Null
           $built = Get-ChildItem -Recurse -Filter "GH-AITranslator.${{ matrix.tfm }}.dll" -Path "src/GHAITranslator/bin/Release"
-          if ($built.Count -eq 0) { throw "Built .dll not found for ${{ matrix.tfm }}" }
+          if (-not $built) { throw "Built .dll not found for ${{ matrix.tfm }}" }
           $core = Get-ChildItem -Recurse -Filter "GH-AITranslator.Core.dll" -Path "src/GHAITranslator.Core/bin/Release" | Where-Object { $_.DirectoryName -like "*${{ matrix.tfm }}*" }
           $newton = Get-ChildItem -Recurse -Filter "Newtonsoft.Json.dll" -Path "src/GHAITranslator/bin/Release" | Where-Object { $_.DirectoryName -like "*${{ matrix.tfm }}*" }
-          Copy-Item $built[0].FullName   "$ghaDir/GH-AITranslator.gha"
+          Copy-Item $built[0].FullName "$ghaDir/GH-AITranslator.gha"
           if ($core)   { Copy-Item $core[0].FullName   "$ghaDir/GH-AITranslator.Core.dll" }
           if ($newton) { Copy-Item $newton[0].FullName "$ghaDir/Newtonsoft.Json.dll" }
           Get-ChildItem $ghaDir
