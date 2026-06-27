@@ -290,11 +290,45 @@ namespace GHAITranslator.Integration
         {
             try
             {
+                // Native Grasshopper components (anything shipped inside
+                // Grasshopper.dll / RhinoCommon) share the BuiltinSeed
+                // dictionary which uses the canonical "Native" plugin key.
+                // Third-party plugins (Kangaroo2, Weaverbird, LunchBox,
+                // OpenNest, etc.) get a stable per-plugin key derived from
+                // their assembly name — that's stable across sessions and
+                // doesn't burn GUIDs on unrelated components.
+                var t = obj?.GetType();
+                var asmName = t?.Assembly?.GetName().Name ?? string.Empty;
+                if (IsNativeAssembly(asmName)) return ComponentKey.FallbackPlugin;
+                if (!string.IsNullOrEmpty(asmName)) return SanitizeAsm(asmName);
+            }
+            catch { }
+            // Last-resort fallback: use the GUID. This still gives a
+            // stable per-component key, so even an unknown plugin works
+            // after one AI translation round.
+            try
+            {
                 var g = obj?.ComponentGuid;
                 if (g.HasValue && g.Value != Guid.Empty) return g.Value.ToString("N");
             }
             catch { }
             return ComponentKey.FallbackPlugin;
+        }
+
+        private static bool IsNativeAssembly(string asmName)
+        {
+            if (string.IsNullOrEmpty(asmName)) return false;
+            return asmName.Equals("Grasshopper", System.StringComparison.OrdinalIgnoreCase)
+                || asmName.StartsWith("Grasshopper.", System.StringComparison.OrdinalIgnoreCase)
+                || asmName.Equals("RhinoCommon", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string SanitizeAsm(string asmName)
+        {
+            var buf = new System.Text.StringBuilder(asmName.Length);
+            foreach (var c in asmName)
+                buf.Append(char.IsLetterOrDigit(c) || c == '_' ? c : '_');
+            return buf.ToString();
         }
 
         private static Guid SafeComponentGuid(IGH_DocumentObject obj)

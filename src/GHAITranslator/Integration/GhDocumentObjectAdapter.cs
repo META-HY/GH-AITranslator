@@ -83,13 +83,36 @@ namespace GHAITranslator.Integration
             {
                 try
                 {
-                    // R8 dropped IGH_DocumentObject.Library — fall back to the
-                    // component GUID as a stable per-plugin key.
+                    // Match ComponentTranslator.SafePlugin: native Grasshopper
+                    // components fall under the "Native" canonical key
+                    // (their entries live in BuiltinSeed); third-party plugins
+                    // get a stable key from their assembly name so the AI
+                    // translation round-trip writes a key that future runs
+                    // can look up without burning a GUID per component.
+                    var t = obj?.GetType();
+                    var asmName = t?.Assembly?.GetName().Name ?? string.Empty;
+                    if (!string.IsNullOrEmpty(asmName))
+                    {
+                        if (asmName.Equals("Grasshopper", System.StringComparison.OrdinalIgnoreCase)
+                            || asmName.StartsWith("Grasshopper.", System.StringComparison.OrdinalIgnoreCase)
+                            || asmName.Equals("RhinoCommon", System.StringComparison.OrdinalIgnoreCase))
+                            return ComponentKey.FallbackPlugin;
+                        var buf = new System.Text.StringBuilder(asmName.Length);
+                        foreach (var c in asmName)
+                            buf.Append(char.IsLetterOrDigit(c) || c == '_' ? c : '_');
+                        return buf.ToString();
+                    }
+                }
+                catch { }
+                // R8 dropped IGH_DocumentObject.Library — fall back to the
+                // component GUID as a stable per-plugin key.
+                try
+                {
                     var g = obj?.ComponentGuid;
                     if (g.HasValue && g.Value != Guid.Empty) return g.Value.ToString("N");
-                    return ComponentKey.FallbackPlugin;
                 }
-                catch { return ComponentKey.FallbackPlugin; }
+                catch { }
+                return ComponentKey.FallbackPlugin;
             }
         }
 
