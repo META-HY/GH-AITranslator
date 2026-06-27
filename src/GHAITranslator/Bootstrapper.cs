@@ -78,9 +78,14 @@ public static class Bootstrapper
         if (_dict == null || _settings == null) return;
         var mode = _settings.LanguageMode;
         var translated = 0;
-        foreach (var doc in Instances.DocumentServer.DocumentNames())
+        // GH_DocumentServer exposes `DocumentCount` (int) and a numeric indexer
+        // in BOTH GH 7 and GH 8. The string-name indexer only exists in GH 8.
+        // To stay cross-version compatible, iterate by index.
+        var server = Instances.DocumentServer;
+        var count = server.DocumentCount;
+        for (var i = 0; i < count; i++)
         {
-            var d = Instances.DocumentServer[doc];
+            var d = server[i];
             if (d == null) continue;
             foreach (var obj in d.Objects)
             {
@@ -103,9 +108,11 @@ public static class Bootstrapper
     {
         if (_dict == null) return;
         var restored = 0;
-        foreach (var docName in Instances.DocumentServer.DocumentNames())
+        var server = Instances.DocumentServer;
+        var count = server.DocumentCount;
+        for (var i = 0; i < count; i++)
         {
-            var d = Instances.DocumentServer[docName];
+            var d = server[i];
             if (d == null) continue;
             foreach (var obj in d.Objects)
             {
@@ -120,9 +127,13 @@ public static class Bootstrapper
         Log.Info($"RestoreAll: {restored} object(s) restored to English.");
     }
 
-    private static void OnPipelinePersist(string key, bool immediate)
+    // Signature is `Func<string, bool>` to match both TranslationPipeline
+    // and DocumentHook. The `immediate` flag from older callers is
+    // intentionally dropped — persistence is always "immediate enough"
+    // (we write the whole overlay file, which is cheap).
+    private static bool OnPipelinePersist(string key)
     {
-        if (_dict == null) return;
+        if (_dict == null) return false;
         try
         {
             var overlay = new DictionaryIo.OverlayFile { Entries = new List<TranslationEntry>() };
@@ -134,10 +145,12 @@ public static class Bootstrapper
                 overlay.Entries.Add(e);
             }
             DictionaryIo.Save(PluginPaths.DictionaryFile, overlay);
+            return true;
         }
         catch (Exception ex)
         {
             Log.Warn($"OnPipelinePersist failed: {ex.Message}");
+            return false;
         }
     }
 

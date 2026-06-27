@@ -20,13 +20,13 @@ public sealed class DocumentHook : IDisposable
 {
     private readonly Func<TranslationDictionary> _dictAccessor;
     private readonly Func<PluginSettings>       _settingsAccessor;
-    private readonly Action<string, bool>       _persistCallback;
+    private readonly Func<string, bool>        _persistCallback;   // (key) -> success
     private bool _disposed;
 
     public DocumentHook(
         Func<TranslationDictionary> dictAccessor,
         Func<PluginSettings> settingsAccessor,
-        Action<string, bool> persistCallback)
+        Func<string, bool> persistCallback)
     {
         _dictAccessor     = dictAccessor;
         _settingsAccessor = settingsAccessor;
@@ -35,12 +35,16 @@ public sealed class DocumentHook : IDisposable
 
     public void Attach()
     {
-        GH_DocumentServer.DocumentAdded += OnDocumentAdded;
+        // `Instances.DocumentServer` returns the singleton in both GH 7
+        // and GH 8. The static `GH_DocumentServer.DocumentAdded` shortcut
+        // only exists on GH 8, so we always go through `Instances` for
+        // cross-version compatibility.
+        Instances.DocumentServer.DocumentAdded += OnDocumentAdded;
     }
 
     public void Detach()
     {
-        GH_DocumentServer.DocumentAdded -= OnDocumentAdded;
+        Instances.DocumentServer.DocumentAdded -= OnDocumentAdded;
     }
 
     private void OnDocumentAdded(GH_DocumentServer sender, GH_Document doc)
@@ -76,7 +80,7 @@ public sealed class DocumentHook : IDisposable
                 if (entry == null) continue;
                 if (ComponentTranslator.ApplyToObject(obj, entry, mode))
                 {
-                    _persistCallback(key, false);
+                    _persistCallback(key);
                 }
             }
             RefreshCanvas();
@@ -106,14 +110,16 @@ public sealed class DocumentHook : IDisposable
                 translated++;
             }
         }
-        if (translated > 0) _persistCallback("__canvas_open__", true);
+        if (translated > 0) _persistCallback("__canvas_open__");
         RefreshCanvas();
         Log.Info($"DocumentHook translated {translated} object(s) on canvas open.");
     }
 
     /// <summary>
     /// Walk the full document graph: every object on the canvas, plus every
-    /// parameter inside every group, plus every Cluster's child document.
+    /// parameter inside every group. Cluster traversal is intentionally
+    /// skipped — `GH_Cluster.Document` differs between GH 7 (method) and
+    /// GH 8 (property), and clusters are deprecated in GH 8 anyway.
     /// </summary>
     private static IEnumerable<IGH_DocumentObject> EnumerateAll(GH_Document doc)
     {
@@ -123,14 +129,6 @@ public sealed class DocumentHook : IDisposable
             if (obj is IGH_Param param && param.VolatileDataCount > 0)
             {
                 // parameters don't have child objects, but their source wires do
-            }
-        }
-        foreach (var obj in doc.Objects) // second pass for clusters
-        {
-            if (obj is GH_Cluster cluster && cluster.Document != null)
-            {
-                foreach (var child in EnumerateAll(cluster.Document))
-                    yield return child;
             }
         }
     }
