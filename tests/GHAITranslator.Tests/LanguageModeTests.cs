@@ -226,5 +226,44 @@ namespace GHAITranslator.Tests
             // GHChinese-style translated components straight away.
             Assert.Equal(LanguageMode.Chinese, new PluginSettings().Mode);
         }
+
+        // ── BuiltinSeed integration ─────────────────────────────────────────
+
+        [Fact]
+        public void BuiltinSeed_Has_Native_Curve()
+        {
+            // The seed is internal so we reach in via a fresh dictionary
+            // (Load() with no file installed the seed for us).
+            var d = NewDict();
+            var entry = d.GetEntry("Native_Curve");
+            Assert.NotNull(entry);
+            // Curve isn't in BuiltinSeed yet — sanity check that the seed
+            // load didn't crash and that entries DO have Chinese content.
+            if (entry != null)
+                Assert.False(string.IsNullOrEmpty(entry.Name + entry.NickName));
+        }
+
+        [Fact]
+        public void BuiltinSeed_Has_Common_Native_Components()
+        {
+            // These are the components a user reaches for in their first
+            // session. Each must round-trip cleanly through the dictionary
+            // and produce a non-empty Chinese display string.
+            var d = NewDict();
+            string[] keys =
+            {
+                "Native_Point", "Native_Line", "Native_Circle", "Native_Arc",
+                "Native_Polyline", "Native_Rectangle", "Native_Plane",
+                "Native_Number", "Native_Range", "Native_Random",
+                "Native_Panel", "Native_Number_Slider", "Native_Boolean_Toggle",
+                "Native_Colour_Swatch"
+            };
+            foreach (var k in keys)
+            {
+                var display = d.GetDisplayText(k, LanguageMode.Chinese);
+                Assert.False(string.IsNullOrEmpty(display),
+                    $"Built-in key {k} must have a non-empty Chinese display string.");
+            }
+        }
     }
 }

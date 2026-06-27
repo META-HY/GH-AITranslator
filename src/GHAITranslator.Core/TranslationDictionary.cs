@@ -36,14 +36,21 @@ public sealed class TranslationDictionary
         lock (_lock) { return new Dictionary<string, TranslationEntry>(_entries); }
     }
 
-    /// <summary>Load dictionary from disk. If the file is missing, the built-in seed is installed.</summary>
+    /// <summary>
+    /// Load dictionary from disk. Built-in seed entries are ALWAYS merged in
+    /// as the floor — user files (and AI translations) add on top. This means
+    /// a v1 dictionary file that used ComponentGuid-shaped keys won't shadow
+    /// the canonical "Native_*" keys we ship, and switching from v1 to v2 is
+    /// seamless: the user's AI entries survive, the seed is restored.
+    /// </summary>
     public void Load()
     {
         lock (_lock)
         {
+            var seed = BuiltinSeed.Build();
             if (!File.Exists(_filePath))
             {
-                _entries = BuiltinSeed.Build();
+                _entries = seed;
                 TrySaveUnsafe();
                 return;
             }
@@ -52,14 +59,23 @@ public sealed class TranslationDictionary
             {
                 var json = File.ReadAllText(_filePath);
                 var data = JsonConvert.DeserializeObject<DictionaryFile>(json);
-                _entries = data?.Entries != null
+                var userEntries = data?.Entries != null
                     ? new Dictionary<string, TranslationEntry>(data.Entries, StringComparer.Ordinal)
-                    : BuiltinSeed.Build();
+                    : new Dictionary<string, TranslationEntry>(StringComparer.Ordinal);
+
+                // Start from the seed (canonical "Native_*" + third-party
+                // pack keys) and let user entries override it on a per-key
+                // basis. This way a v1 dictionary file using GUID-shaped
+                // keys never erases the canonical Native_ keys, and a v2
+                // user file that DOES share a key with the seed (e.g. the
+                // user customised Native_Curve's Chinese name) wins.
+                foreach (var kv in userEntries) seed[kv.Key] = kv.Value;
+                _entries = seed;
             }
             catch (Exception)
             {
                 // Corrupt file: fall back to built-in seed so the plugin still works.
-                _entries = BuiltinSeed.Build();
+                _entries = seed;
             }
         }
     }

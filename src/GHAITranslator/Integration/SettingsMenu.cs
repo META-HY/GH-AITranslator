@@ -238,6 +238,27 @@ namespace GHAITranslator.Integration
             {
                 get
                 {
+                    // Mirror ComponentTranslator.SafePlugin: route native
+                    // GH components to the "Native" canonical key so AI
+                    // translations land in the same namespace as BuiltinSeed;
+                    // third-party plugins get a stable assembly-derived key.
+                    try
+                    {
+                        var t = _o?.GetType();
+                        var asmName = t?.Assembly?.GetName().Name ?? string.Empty;
+                        if (!string.IsNullOrEmpty(asmName))
+                        {
+                            if (asmName.Equals("Grasshopper", System.StringComparison.OrdinalIgnoreCase)
+                                || asmName.StartsWith("Grasshopper.", System.StringComparison.OrdinalIgnoreCase)
+                                || asmName.Equals("RhinoCommon", System.StringComparison.OrdinalIgnoreCase))
+                                return ComponentKey.FallbackPlugin;
+                            var buf = new System.Text.StringBuilder(asmName.Length);
+                            foreach (var c in asmName)
+                                buf.Append(char.IsLetterOrDigit(c) || c == '_' ? c : '_');
+                            return buf.ToString();
+                        }
+                    }
+                    catch { }
                     var g = _o.ComponentGuid;
                     return g == Guid.Empty ? ComponentKey.FallbackPlugin : g.ToString("N");
                 }

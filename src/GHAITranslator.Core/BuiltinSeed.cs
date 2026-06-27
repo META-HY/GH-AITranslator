@@ -283,6 +283,17 @@ internal static class BuiltinSeed
             },
 
             // ────── Curve ops (subset) ──────
+            ["Native_Curve"] = new()
+            {
+                Name = "曲线",
+                NickName = "曲线",
+                NameEn = "Curve",
+                NickNameEn = "Curve",
+                Description = "从曲线数据列表中取出一条曲线",
+                Inputs = { ["C"] = "曲线" },
+                Outputs = { ["C"] = "曲线" },
+                Source = TranslationSource.Builtin
+            },
             ["Native_Divide_Curve"] = new()
             {
                 Name = "等分曲线",
