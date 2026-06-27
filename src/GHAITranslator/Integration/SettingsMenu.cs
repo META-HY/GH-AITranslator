@@ -1,7 +1,9 @@
 // Grasshopper menu hook. Registers a "GH-AITranslator" item in
-// the GH menu bar with three actions:
+// the GH menu bar with:
+//   * Display mode radio items (Chinese / Bilingual / English) — flip the
+//     active LanguageMode and re-translate the canvas immediately.
 //   * Translate Canvas Now — force-translate every visible component, hitting
-//     the AI only when the local dictionary is cold.
+//     the AI only when the local dictionary is cold (kept from v1).
 //   * Reload Dictionary    — re-apply all third-party packs on top of the
 //     current user dictionary.
 //   * Settings…            — open the modeless settings panel.
@@ -23,6 +25,9 @@ namespace GHAITranslator.Integration
     internal sealed class SettingsMenu : IDisposable
     {
         private ToolStripMenuItem? _rootItem;
+        private ToolStripMenuItem? _chineseItem;
+        private ToolStripMenuItem? _bilingualItem;
+        private ToolStripMenuItem? _englishItem;
 
         public void Install()
         {
@@ -33,6 +38,37 @@ namespace GHAITranslator.Integration
                 if (menu == null) return;
 
                 _rootItem = new ToolStripMenuItem("GH-AITranslator");
+
+                // Display-mode radio group. We build the items first, then
+                // wire click handlers and refresh the checkmarks against
+                // the current PluginSettings so the menu reflects whatever
+                // the user picked in the settings panel.
+                _chineseItem = new ToolStripMenuItem("中文(&C)")
+                {
+                    CheckOnClick = true,
+                    ToolTipText = "Curve → 曲线"
+                };
+                _chineseItem.Click += (_, _) => ApplyMode(LanguageMode.Chinese);
+                _rootItem.DropDownItems.Add(_chineseItem);
+
+                _bilingualItem = new ToolStripMenuItem("中英对照(&B)")
+                {
+                    CheckOnClick = true,
+                    ToolTipText = "Curve / 曲线"
+                };
+                _bilingualItem.Click += (_, _) => ApplyMode(LanguageMode.Bilingual);
+                _rootItem.DropDownItems.Add(_bilingualItem);
+
+                _englishItem = new ToolStripMenuItem("英文原文(&E)")
+                {
+                    CheckOnClick = true,
+                    ToolTipText = "Keep the original English label, no Chinese."
+                };
+                _englishItem.Click += (_, _) => ApplyMode(LanguageMode.English);
+                _rootItem.DropDownItems.Add(_englishItem);
+
+                _rootItem.DropDownItems.Add(new ToolStripSeparator());
+
                 var translateItem = new ToolStripMenuItem("翻译当前画布(&T)...");
                 translateItem.Click += async (_, _) => await TranslateCanvasAsync().ConfigureAwait(false);
                 _rootItem.DropDownItems.Add(translateItem);
@@ -47,11 +83,52 @@ namespace GHAITranslator.Integration
                 settingsItem.Click += (_, _) => OpenSettings();
                 _rootItem.DropDownItems.Add(settingsItem);
 
+                RefreshCheckmarks();
+
+                // DropDownOpening fires every time the user opens the menu —
+                // use it to re-sync checkmarks in case the settings panel
+                // was used to change the mode while the menu was hidden.
+                _rootItem.DropDownOpening += (_, _) => RefreshCheckmarks();
+
                 menu.Items.Add(_rootItem);
             }
             catch (Exception ex)
             {
                 Log.Error("Failed to install settings menu", ex);
+            }
+        }
+
+        private void RefreshCheckmarks()
+        {
+            var mode = Bootstrapper.Settings?.Mode ?? LanguageMode.Chinese;
+            if (_chineseItem   != null) _chineseItem.Checked   = mode == LanguageMode.Chinese;
+            if (_bilingualItem != null) _bilingualItem.Checked = mode == LanguageMode.Bilingual;
+            if (_englishItem   != null) _englishItem.Checked   = mode == LanguageMode.English;
+        }
+
+        private static void ApplyMode(LanguageMode mode)
+        {
+            try
+            {
+                var settings = Bootstrapper.Settings;
+                if (settings == null) return;
+                settings.Mode = mode;
+                // Push the new mode into the live translator. Re-applies
+                // to every open document so the change is visible without
+                // needing to close/reopen the file.
+                Bootstrapper.NotifySettingsChanged();
+                // Persist so the choice survives a Rhino restart.
+                try
+                {
+                    var rhinoVersion = "7.0";
+                    try { var v = Rhino.RhinoApp.Version; if (v != null && v.Major >= 8) rhinoVersion = "8.0"; } catch { }
+                    SettingsStore.Save(PluginPaths.GetSettingsPath(rhinoVersion), settings);
+                }
+                catch (Exception ex) { Log.Error("Save settings after mode change failed", ex); }
+            }
+            catch (Exception ex)
+            {
+                Log.Error("ApplyMode failed", ex);
             }
         }
 

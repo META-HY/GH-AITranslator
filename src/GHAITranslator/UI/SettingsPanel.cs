@@ -30,7 +30,9 @@ namespace GHAITranslator.UI
         private NumericUpDown _fontSizeSpinner;
         private Button _fontColorBtn;
         private Button _bgColorBtn;
-        private ComboBox _displayModeCombo;
+        private RadioButton _chineseRadio;
+        private RadioButton _bilingualRadio;
+        private RadioButton _englishRadio;
         private CheckBox _hoverCheck;
         private Label _dictCountLabel;
         private Button _exportBtn;
@@ -111,12 +113,16 @@ namespace GHAITranslator.UI
             _enableCheck = new CheckBox { Text = "在画布上叠加中文标签", Dock = DockStyle.Fill };
             layout.Controls.Add(_enableCheck, 1, 4);
 
-            // ── Display mode ──
-            AddLabel(layout, "显示模式:", 5);
-            _displayModeCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
-            _displayModeCombo.Items.Add(new ComboItem((int)TranslationDisplayMode.LabelOverlay, "标签叠加(零侵入,推荐)"));
-            _displayModeCombo.Items.Add(new ComboItem((int)TranslationDisplayMode.PropertyReplace, "属性替换(实验性)"));
-            layout.Controls.Add(_displayModeCombo, 1, 5);
+            // ── Language mode (radio buttons, mutually exclusive) ──
+            AddLabel(layout, "显示语言(&L):", 5);
+            var langPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.TopDown };
+            _chineseRadio = new RadioButton { Text = "中文 (Curve → 曲线)", AutoSize = true };
+            _bilingualRadio = new RadioButton { Text = "中英对照 (Curve / 曲线)", AutoSize = true };
+            _englishRadio = new RadioButton { Text = "英文原文 (不翻译)", AutoSize = true };
+            langPanel.Controls.Add(_chineseRadio);
+            langPanel.Controls.Add(_bilingualRadio);
+            langPanel.Controls.Add(_englishRadio);
+            layout.Controls.Add(langPanel, 1, 5);
 
             // ── Font size ──
             AddLabel(layout, "标签字号:", 6);
@@ -234,13 +240,12 @@ namespace GHAITranslator.UI
             _fontColorBtn.BackColor = _fontColor;
             _bgColorBtn.BackColor = _bgColor;
             _hoverCheck.Checked = _settings.ShowDescriptionOnHover;
-            for (var i = 0; i < _displayModeCombo.Items.Count; i++)
+            // Language mode → radio button (mutually exclusive).
+            switch (_settings.Mode)
             {
-                if (((ComboItem)_displayModeCombo.Items[i]).Value == (int)_settings.DisplayMode)
-                {
-                    _displayModeCombo.SelectedIndex = i;
-                    break;
-                }
+                case LanguageMode.Bilingual: _bilingualRadio.Checked = true; break;
+                case LanguageMode.English:   _englishRadio.Checked   = true; break;
+                default:                      _chineseRadio.Checked   = true; break;
             }
             _dictCountLabel.Text = $"共 {_dict.Count} 条 (路径: {_dictPath})";
         }
@@ -271,8 +276,12 @@ namespace GHAITranslator.UI
                 _settings.LabelTextColorArgb = unchecked((int)_fontColor.ToArgb());
                 _settings.LabelBackgroundArgb = unchecked((int)_bgColor.ToArgb());
                 _settings.ShowDescriptionOnHover = _hoverCheck.Checked;
-                if (_displayModeCombo.SelectedItem is ComboItem dm)
-                    _settings.DisplayMode = (TranslationDisplayMode)dm.Value;
+                // Radio buttons: pick the checked one and write back to
+                // LanguageMode. RadioButtons auto-exclude siblings, so exactly
+                // one of these three is true after any user click.
+                if (_chineseRadio.Checked)        _settings.Mode = LanguageMode.Chinese;
+                else if (_bilingualRadio.Checked) _settings.Mode = LanguageMode.Bilingual;
+                else if (_englishRadio.Checked)   _settings.Mode = LanguageMode.English;
 
                 SettingsStore.Save(GetSettingsPath(), _settings);
                 SettingsChanged?.Invoke(this, EventArgs.Empty);

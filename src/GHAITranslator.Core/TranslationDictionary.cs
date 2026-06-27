@@ -97,6 +97,47 @@ public sealed class TranslationDictionary
         }
     }
 
+    /// <summary>
+    /// Compute the string the component's <c>Name</c>/<c>NickName</c>
+    /// properties should be rewritten to under the given display mode.
+    /// Returns null when there is no usable translation for the key —
+    /// callers must then fall back to keeping the component's original
+    /// English text rather than blanking it out.
+    ///
+    /// Behaviour by mode:
+    ///   * Chinese   → entry.NickName (or entry.Name when NickName empty)
+    ///   * Bilingual → "NickNameEn / NickName" (or "NameEn / Name" when
+    ///                 the English nickname is missing). Falls back to
+    ///                 single-language when no English half is known.
+    ///   * English   → null (the caller leaves the original text alone)
+    ///
+    /// This is a pure function over the in-memory dictionary — no AI, no IO.
+    /// </summary>
+    public string? GetDisplayText(string key, LanguageMode mode)
+    {
+        var entry = GetEntry(key);
+        if (entry == null || !entry.HasChinese) return null;
+
+        switch (mode)
+        {
+            case LanguageMode.Chinese:
+                return string.IsNullOrEmpty(entry.NickName) ? entry.Name : entry.NickName;
+
+            case LanguageMode.Bilingual:
+            {
+                var zh = !string.IsNullOrEmpty(entry.NickName) ? entry.NickName : entry.Name;
+                var en = !string.IsNullOrEmpty(entry.NickNameEn) ? entry.NickNameEn
+                       : !string.IsNullOrEmpty(entry.NameEn)    ? entry.NameEn
+                       : null;
+                return en == null ? zh : $"{en} / {zh}";
+            }
+
+            case LanguageMode.English:
+            default:
+                return null;
+        }
+    }
+
     public TranslationEntry? GetEntry(string key)
     {
         if (string.IsNullOrEmpty(key)) return null;

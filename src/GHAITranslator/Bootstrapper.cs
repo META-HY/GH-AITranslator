@@ -16,7 +16,8 @@ namespace GHAITranslator
         private static TranslationDictionary _dict;
         private static PluginSettings _settings;
         private static TranslationPipeline _pipeline;
-        private static CanvasLabelRenderer _renderer;
+        private static ComponentTranslator _translator;
+        private static DocumentHook _documentHook;
         private static HttpAiClient _aiClient;
         private static SettingsMenu _menu;
 
@@ -44,8 +45,13 @@ namespace GHAITranslator
             _aiClient = new HttpAiClient(_settings);
             _pipeline = new TranslationPipeline(_dict, _aiClient, maxConcurrency: 3);
 
-            _renderer = new CanvasLabelRenderer(_pipeline, _settings);
-            _renderer.Attach();
+            _translator = new ComponentTranslator(_dict);
+            _documentHook = new DocumentHook(_translator);
+            // Apply the user's saved language mode to any documents that
+            // are already open at the moment the plugin loads. (Document
+            // add events handle everything opened afterwards.)
+            _documentHook.SetMode(_settings.Mode);
+            _documentHook.Install();
 
             // third-party packs
             try
@@ -111,7 +117,7 @@ namespace GHAITranslator
         {
             try { _menuInstallTimer?.Dispose(); _menuInstallTimer = null; } catch { /* best-effort */ }
             try { _menu?.Dispose(); } catch (Exception ex) { Log.Error("menu dispose", ex); }
-            try { _renderer?.Detach(); } catch (Exception ex) { Log.Error("renderer detach", ex); }
+            try { _documentHook?.Dispose(); } catch (Exception ex) { Log.Error("document hook dispose", ex); }
             try { _dict?.Save(); } catch (Exception ex) { Log.Error("dict save", ex); }
             try
             {
@@ -125,7 +131,8 @@ namespace GHAITranslator
 
             _aiClient?.Dispose();
             _aiClient = null;
-            _renderer = null;
+            _documentHook = null;
+            _translator = null;
             _pipeline = null;
             _dict = null;
             _settings = null;
@@ -133,8 +140,11 @@ namespace GHAITranslator
 
         public static void NotifySettingsChanged()
         {
-            if (_settings == null || _renderer == null) return;
-            _renderer.UpdateSettings(_settings);
+            if (_settings == null || _documentHook == null) return;
+            // Re-apply the current language mode to every open document
+            // so changes like API key / target language take effect on
+            // the canvas immediately.
+            _documentHook.SetMode(_documentHook.CurrentMode);
         }
 
         private static string DetectRhinoVersion()
