@@ -1,7 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net.Http;
+using System.IO;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,33 +8,42 @@ using GHAITranslator.Core.Models;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
+// HttpWebRequest / WebRequest are obsolete in net6+ but still the only
+// portable HTTP API available in netstandard2.0 / net48. Suppress the
+// obsolete warning rather than pull a System.Net.Http polyfill that's
+// been deprecated for years.
+#pragma warning disable SYSLIB0014
+
 namespace GHAITranslator.Core;
 
 /// <summary>
 /// OpenAI-compatible chat-completions HTTP client. Works with OpenAI,
 /// Qwen, DeepSeek, and any custom endpoint that implements the
 /// <c>POST /chat/completions</c> JSON shape.
+///
+/// Uses <see cref="HttpWebRequest"/> instead of <c>HttpClient</c> so the
+/// library stays portable across netstandard2.0 / net48 / net7.0-windows
+/// without a per-target NuGet dance.
 /// </summary>
 public sealed class HttpAiClient : IAiClient, IDisposable
 {
     private readonly AiProviderConfig _cfg;
-    private readonly HttpClient _http;
     private readonly PromptBuilder _prompts;
 
     public HttpAiClient(AiProviderConfig cfg, PromptBuilder? prompts = null)
     {
         _cfg = cfg ?? new AiProviderConfig();
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(5, _cfg.TimeoutSeconds)) };
         _prompts = prompts ?? new PromptBuilder();
     }
 
-    public async Task<TranslationEntry?> TranslateAsync(ComponentInfo info, CancellationToken ct = default)
+    public Task<TranslationEntry?> TranslateAsync(ComponentInfo info, CancellationToken ct = default)
     {
-        if (info == null || string.IsNullOrEmpty(info.OriginalName)) return null;
+        if (info == null || string.IsNullOrEmpty(info.OriginalName))
+            return Task.FromResult<TranslationEntry?>(null);
         if (string.IsNullOrEmpty(_cfg.ApiKey))
         {
             Log.Warn("HttpAiClient: API key is empty, skipping translation.");
-            return null;
+            return Task.FromResult<TranslationEntry?>(null);
         }
 
         var messages = _prompts.BuildChatMessages(info);
@@ -49,29 +57,52 @@ public sealed class HttpAiClient : IAiClient, IDisposable
 
         try
         {
-            var req = new HttpRequestMessage(HttpMethod.Post, _cfg.Endpoint);
+            var body = JsonConvert.SerializeObject(payload);
+            var req = (HttpWebRequest)WebRequest.Create(_cfg.Endpoint);
+            req.Method = "POST";
+            req.ContentType = "application/json; charset=utf-8";
             req.Headers.Add("Authorization", $"Bearer {_cfg.ApiKey}");
-            req.Content = new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
+            req.Timeout = Math.Max(5, _cfg.TimeoutSeconds) * 1000;
+            req.ReadWriteTimeout = req.Timeout;
 
-            var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-
-            if (!resp.IsSuccessStatusCode)
+            using (var stream = req.GetRequestStream())
             {
-                Log.Warn($"HttpAiClient {(int)resp.StatusCode}: {Truncate(body, 200)}");
-                return null;
+                var bytes = Encoding.UTF8.GetBytes(body);
+                stream.Write(bytes, 0, bytes.Length);
             }
 
-            return ParseResponse(body, info);
+            using (var resp = (HttpWebResponse)req.GetResponse())
+            using (var reader = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+            {
+                var respBody = reader.ReadToEnd();
+                return Task.FromResult(ParseResponse(respBody, info));
+            }
         }
-        catch (OperationCanceledException)
+        catch (WebException wex)
         {
-            throw;
+            var respBody = ReadErrorBody(wex);
+            Log.Warn($"HttpAiClient {wex.Status}: {Truncate(respBody, 200)}");
+            return Task.FromResult<TranslationEntry?>(null);
         }
         catch (Exception ex)
         {
             Log.Warn($"HttpAiClient.TranslateAsync failed: {ex.Message}");
-            return null;
+            return Task.FromResult<TranslationEntry?>(null);
+        }
+    }
+
+    private static string ReadErrorBody(WebException wex)
+    {
+        try
+        {
+            using var stream = wex.Response?.GetResponseStream();
+            if (stream == null) return "";
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            return reader.ReadToEnd();
+        }
+        catch
+        {
+            return "";
         }
     }
 
@@ -107,20 +138,21 @@ public sealed class HttpAiClient : IAiClient, IDisposable
         }
     }
 
-    private static string StripCodeFence(string s)
+    private static string StripCodeFence(string? s)
     {
-        s = s.Trim();
-        if (s.StartsWith("```"))
+        if (string.IsNullOrEmpty(s)) return "";
+        var t = s!.Trim();
+        if (t.StartsWith("```"))
         {
-            var firstNewline = s.IndexOf('\n');
-            if (firstNewline >= 0) s = s.Substring(firstNewline + 1);
-            if (s.EndsWith("```")) s = s.Substring(0, s.Length - 3);
+            var firstNewline = t.IndexOf('\n');
+            if (firstNewline >= 0) t = t.Substring(firstNewline + 1);
+            if (t.EndsWith("```")) t = t.Substring(0, t.Length - 3);
         }
-        return s.Trim();
+        return t.Trim();
     }
 
     private static string Truncate(string s, int max) =>
         s == null ? "" : (s.Length <= max ? s : s.Substring(0, max) + "…");
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose() { /* HttpWebRequest has no managed lifetime */ }
 }

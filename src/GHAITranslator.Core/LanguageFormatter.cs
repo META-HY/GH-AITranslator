@@ -72,9 +72,11 @@ public static class LanguageFormatter
     private static string ShortenEnglish(string? en)
     {
         if (string.IsNullOrEmpty(en)) return "";
-        if (en.Length <= 3) return en;
+        // After IsNullOrEmpty, en is non-null.
+        var s = en!;
+        if (s.Length <= 3) return s;
         // Common GH convention: keep up to 3 chars.
-        return en.Substring(0, Math.Min(3, en.Length));
+        return s.Substring(0, Math.Min(3, s.Length));
     }
 
     private static string JoinShort(string cn, string? en)

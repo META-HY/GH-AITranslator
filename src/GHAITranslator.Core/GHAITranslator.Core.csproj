@@ -1,11 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <!-- The plugin itself targets net48 + net7.0-windows (see
-         src/GHAITranslator). The Core library is referenced by both the
-         plugin (Windows-only) and the test project (net8.0). We need a
-         single library assembly that can be consumed by all three targets.
-         Adding net8.0 keeps the test project happy on Linux CI. -->
-    <TargetFrameworks>net8.0;net48;net7.0-windows</TargetFrameworks>
+    <!-- Core targets netstandard2.0 (consumable by net48 + net7.0-windows
+         plugin), plus net7.0-windows (lets the plugin reference modern
+         APIs directly), plus net8.0 (so the test project on Linux can
+         link without forwarding). The IsExternalInit polyfill covers
+         netstandard2.0. -->
+    <TargetFrameworks>netstandard2.0;net7.0-windows;net8.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
