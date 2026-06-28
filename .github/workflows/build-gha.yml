@@ -71,10 +71,15 @@ jobs:
         run: |
           $ghaDir = "artifacts/${{ matrix.flavor }}"
           New-Item -ItemType Directory -Force -Path $ghaDir | Out-Null
-          $built = Get-ChildItem -Recurse -Filter "GH-AITranslator.${{ matrix.tfm }}.dll" -Path "src/GHAITranslator/bin/Release"
+          $built = Get-ChildItem -Recurse -Filter "GH-AITranslator.dll" -Path "src/GHAITranslator/bin/Release" | Where-Object { $_.DirectoryName -like "*${{ matrix.tfm }}*" }
           if (-not $built) { throw "Built .dll not found for ${{ matrix.tfm }}" }
-          $core = Get-ChildItem -Recurse -Filter "GH-AITranslator.Core.dll" -Path "src/GHAITranslator.Core/bin/Release" | Where-Object { $_.DirectoryName -like "*${{ matrix.tfm }}*" }
-          $newton = Get-ChildItem -Recurse -Filter "Newtonsoft.Json.dll" -Path "src/GHAITranslator/bin/Release" | Where-Object { $_.DirectoryName -like "*${{ matrix.tfm }}*" }
+          # Core is multi-target (netstandard2.0 + net7.0-windows); for the
+          # net48 plugin build, MSBuild picks the netstandard2.0 dll (no
+          # 'net48' substring in path), so we don't filter by TFM here —
+          # there's only one Core.dll per flavor anyway since the matrix
+          # leg runs in isolation.
+          $core = Get-ChildItem -Recurse -Filter "GH-AITranslator.Core.dll" -Path "src/GHAITranslator.Core/bin/Release" | Select-Object -First 1
+          $newton = Get-ChildItem -Recurse -Filter "Newtonsoft.Json.dll" -Path "src/GHAITranslator/bin/Release" | Where-Object { $_.DirectoryName -like "*${{ matrix.tfm }}*" } | Select-Object -First 1
           Copy-Item $built[0].FullName "$ghaDir/GH-AITranslator.gha"
           if ($core)   { Copy-Item $core[0].FullName   "$ghaDir/GH-AITranslator.Core.dll" }
           if ($newton) { Copy-Item $newton[0].FullName "$ghaDir/Newtonsoft.Json.dll" }
